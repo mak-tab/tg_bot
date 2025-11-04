@@ -1,275 +1,429 @@
-from telegram import Update, ReplyKeyboardRemove
-from telegram.ext import ContextTypes
-from telegram.constants import ParseMode
-import db_handler
-import keyboards
-from utils import TZ, get_day_of_week_str 
-from states import (
-    STATE_MENU_STUDENT, STATE_STUDENT_SCHEDULE, STATE_STUDENT_GRADES, 
-    STATE_STUDENT_SETTINGS, STATE_SETTINGS_CHANGE_CREDS
+import logging
+from telegram import Update
+from telegram.ext import (
+    ContextTypes,
+    ConversationHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    filters,
 )
 
-from datetime import datetime, timedelta
-from localization import get_text
+# --- Импорты из наших модулей ---
+import database as db
+import keyboards as kb
 
-# --- Роутеры (Маршрутизаторы) ---
+# --- Настройка логирования ---
+logger = logging.getLogger(__name__)
 
-async def route_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Маршрутизатор для главного меню ученика."""
-    lang = context.user_data.get('lang', 'uz')
-    text = update.message.text
+from bot import (
+    STUDENT_MAIN, 
+    TEACHER_MAIN, 
+    ADMIN_MAIN,
+    STUDENT_SCHEDULE,
+    STUDENT_GRADES,
+    STUDENT_SETTINGS,
+    STUDENT_SETTINGS_CHANGE_LOGIN,
+    STUDENT_SETTINGS_CHANGE_PASS
+)
 
-    # Сравниваем текст с локализованными кнопками
-    if text == get_text(lang, 'btn_schedule'):
-        return await handle_schedule(update, context)
-    elif text == get_text(lang, 'btn_grades'):
-        return await handle_grades(update, context)
-    elif text == get_text(lang, 'btn_settings'):
-        return await handle_settings(update, context)
-    else:
-        # ИЗМЕНЕНО: Ответ на неизвестную команду
-        await update.message.reply_text(get_text(lang, 'unknown_command'))
-        return STATE_MENU_STUDENT
+# --- Локализация ---
+MESSAGES = {
+    'ru': {
+        'schedule_menu': "Выберите, какое расписание вы хотите посмотреть:",
+        'grades_menu': "Выберите предмет, чтобы посмотреть оценки:",
+        'settings_menu': "Ваши настройки.\nНажимайте на кнопки, чтобы изменить их.",
+        'no_grades': "У вас пока нет оценок.",
+        'no_subjects': "Не удалось найти предметы. Обратитесь к администратору.",
+        'schedule_not_found': "Не удалось найти расписание для вашего класса ({class_letter}).",
+        'grades_title': "Оценки по предмету <b>{subject}</b>:",
+        'grades_line': "• {date}: <b>{grade}</b>",
+        'settings_prompt_login': "Введите ваш новый <b>логин</b>.\n\n(Чтобы отменить, напишите /cancel)",
+        'settings_prompt_pass': "Отлично, логин <code>{login}</code>.\nТеперь введите ваш новый <b>пароль</b>.\n\n(Чтобы отменить, напишите /cancel)",
+        'settings_changed_success': "✅ Ваш логин и пароль успешно изменены.",
+        'settings_change_cancelled': "Изменение отменено.",
+        'back_to_main': "Главное меню",
+        'schedule_tomorrow_title': "Расписание на завтра ({day_name}):",
+        'schedule_full_title': "Полное расписание для {class_letter} класса:",
+        'day_monday': "Понедельник",
+        'day_tuesday': "Вторник",
+        'day_wednesday': "Среда",
+        'day_thursday': "Четверг",
+        'day_friday': "Пятница",
+        'day_saturday': "Суббота",
+        'day_sunday': "Воскресенье",
+    },
+    'en': {
+        'schedule_menu': "Select which schedule you want to view:",
+        'grades_menu': "Select a subject to view grades:",
+        'settings_menu': "Your settings.\nPress the buttons to change them.",
+        'no_grades': "You have no grades yet.",
+        'no_subjects': "Could not find subjects. Contact the administrator.",
+        'schedule_not_found': "Could not find schedule for your class ({class_letter}).",
+        'grades_title': "Grades for <b>{subject}</b>:",
+        'grades_line': "• {date}: <b>{grade}</b>",
+        'settings_prompt_login': "Enter your new <b>username</b>.\n\n(To cancel, type /cancel)",
+        'settings_prompt_pass': "Great, username is <code>{login}</code>.\nNow enter your new <b>password</b>.\n\n(To cancel, type /cancel)",
+        'settings_changed_success': "✅ Your username and password have been successfully changed.",
+        'settings_change_cancelled': "Change cancelled.",
+        'back_to_main': "Main menu",
+        'schedule_tomorrow_title': "Schedule for tomorrow ({day_name}):",
+        'schedule_full_title': "Full schedule for class {class_letter}:",
+        'day_monday': "Monday",
+        'day_tuesday': "Tuesday",
+        'day_wednesday': "Wednesday",
+        'day_thursday': "Thursday",
+        'day_friday': "Friday",
+        'day_saturday': "Saturday",
+        'day_sunday': "Sunday",
+    },
+    'uz': {
+        'schedule_menu': "Qaysi dars jadvalini ko'rmoqchisiz:",
+        'grades_menu': "Baholarni ko'rish uchun fanni tanlang:",
+        'settings_menu': "Sizning sozlamalaringiz.\nO'zgartirish uchun tugmalarni bosing.",
+        'no_grades': "Sizda hozircha baholar yo'q.",
+        'no_subjects': "Fanlar topilmadi. Ma'muriyatga murojaat qiling.",
+        'schedule_not_found': "Sinfingiz ({class_letter}) uchun dars jadvali topilmadi.",
+        'grades_title': "<b>{subject}</b> fani bo'yicha baholar:",
+        'grades_line': "• {date}: <b>{grade}</b>",
+        'settings_prompt_login': "Yangi <b>login</b> kiriting.\n\n(Bekor qilish uchun /cancel yozing)",
+        'settings_prompt_pass': "Ajoyib, login <code>{login}</code>.\nEndi yangi <b>parolni</b> kiriting.\n\n(Bekor qilish uchun /cancel yozing)",
+        'settings_changed_success': "✅ Login va parolingiz muvaffaqiyatli o'zgartirildi.",
+        'settings_change_cancelled': "O'zgartirish bekor qilindi.",
+        'back_to_main': "Asosiy menyu",
+        'schedule_tomorrow_title': "Ertangi kun uchun dars jadvali ({day_name}):",
+        'schedule_full_title': "{class_letter}-sinf uchun to'liq dars jadvali:",
+        'day_monday': "Dushanba",
+        'day_tuesday': "Seshanba",
+        'day_wednesday': "Chorshanba",
+        'day_thursday': "Payshanba",
+        'day_friday': "Juma",
+        'day_saturday': "Shanba",
+        'day_sunday': "Yakshanba",
+    }
+}
 
-# ИЗМЕНЕНО: Добавлен НОВЫЙ роутер для подменю "Расписание"
-async def route_schedule_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Маршрутизатор для меню 'Расписание'."""
-    lang = context.user_data.get('lang', 'uz')
-    text = update.message.text
+def get_std_msg(key, lang='ru'):
+    return MESSAGES.get(lang, MESSAGES['ru']).get(key, f"_{key}_")
 
-    if text == get_text(lang, 'btn_schedule_tomorrow'):
-        return await send_schedule_tomorrow(update, context)
-    elif text == get_text(lang, 'btn_schedule_full'):
-        return await send_schedule_full(update, context)
-    elif text == get_text(lang, 'btn_back'):
-        return await back_to_main_menu(update, context)
-    else:
-        await update.message.reply_text(get_text(lang, 'unknown_command'))
-        return STATE_STUDENT_SCHEDULE
+# --- Вспомогательные функции ---
 
-# --- Обработка главного меню ---
+def get_user_data(context: ContextTypes.DEFAULT_TYPE):
+    """Возвращает (lang, user_info, db_id) из context."""
+    lang = context.user_data.get('lang', 'ru')
+    user_info = context.user_data.get('user_info', {})
+    db_id = context.user_data.get('db_id')
+    return lang, user_info, db_id
 
-async def handle_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Показывает кнопки выбора расписания."""
-    # ИЗМЕНЕНО: Получаем lang
-    lang = context.user_data.get('lang', 'uz')
+async def back_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Возвращает пользователя в главное меню ученика."""
+    lang, _, _ = get_user_data(context)
     await update.message.reply_text(
-        # ИЗМЕНЕНО: Используем get_text
-        get_text(lang, 'choose_schedule_type'),
-        # ИЗМЕНЕНО: Передаем lang в клавиатуру
-        reply_markup=keyboards.get_student_schedule_menu(lang)
+        get_std_msg('back_to_main', lang),
+        reply_markup=kb.get_student_main_keyboard(lang)
     )
-    return STATE_STUDENT_SCHEDULE
+    return STUDENT_MAIN
 
-async def handle_grades(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Показывает Inline кнопки с предметами."""
-    # ИЗМЕНЕНО: Получаем lang
-    lang = context.user_data.get('lang', 'uz')
-    username = context.user_data.get("username")
-    subjects = db_handler.get_subjects_for_student(username)
-    
-    if not subjects:
-        # ИЗМЕНЕНО: Используем get_text
-        await update.message.reply_text(get_text(lang, 'no_grades_found'))
-        return STATE_MENU_STUDENT
-        
-    await update.message.reply_text(
-        # ИЗМЕНЕНО: Используем get_text
-        get_text(lang, 'choose_subject_grades'),
-        # ИЗМЕНЕНО: Передаем lang в клавиатуру
-        reply_markup=keyboards.get_subjects_keyboard(subjects, lang)
-    )
-    return STATE_STUDENT_GRADES
-
-async def handle_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Показывает Inline кнопки настроек."""
-    # ИЗМЕНЕНО: Получаем lang
-    lang = context.user_data.get('lang', 'uz')
-    user_id = update.effective_user.id
-    settings = db_handler.get_user_settings(user_id)
-    
-    await update.message.reply_text(
-        # ИЗМЕНЕНО: Используем get_text
-        get_text(lang, 'your_settings'),
-        # ИЗМЕНЕНО: Передаем lang в клавиатуру
-        reply_markup=keyboards.get_settings_keyboard(settings, lang)
-    )
-    return STATE_STUDENT_SETTINGS
-
-# --- Обработка подменю ---
-
-async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Возврат в главное меню (для Reply кнопок)."""
-    # ИЗМЕНЕНО: Получаем lang
-    lang = context.user_data.get('lang', 'uz')
-    await update.message.reply_text(
-        # ИЗМЕНЕНО: Используем get_text
-        get_text(lang, 'main_menu'),
-        # ИЗМЕНЕНО: Передаем lang в клавиатуру
-        reply_markup=keyboards.get_student_main_menu(lang)
-    )
-    return STATE_MENU_STUDENT
-
-async def back_to_main_menu_inline(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Возврат в главное меню (для Inline кнопок)."""
-    # ИЗМЕНЕНО: Получаем lang
-    lang = context.user_data.get('lang', 'uz')
+async def back_to_main_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Обрабатывает нажатие Inline-кнопки 'Назад' и возвращает в гл. меню."""
     query = update.callback_query
     await query.answer()
+    lang, _, _ = get_user_data(context)
+    
+    # Отправляем новое сообщение с ReplyKeyboard
+    await query.message.reply_text(
+        get_std_msg('back_to_main', lang),
+        reply_markup=kb.get_student_main_keyboard(lang)
+    )
+    # Удаляем старое сообщение с InlineKeyboard
+    await query.message.delete()
+    return STUDENT_MAIN
+
+
+# --- 1. Обработчики главного меню (STUDENT_MAIN) ---
+
+async def handle_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Переводит в меню 'Расписание'."""
+    lang, _, _ = get_user_data(context)
+    await update.message.reply_text(
+        get_std_msg('schedule_menu', lang),
+        reply_markup=kb.get_student_schedule_keyboard(lang)
+    )
+    return STUDENT_SCHEDULE
+
+async def handle_grades(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Переводит в меню 'Оценки'."""
+    lang, user_info, db_id = get_user_data(context)
+    
+    # Оценки хранятся в data.json
+    all_data = db.get_app_data()
+    # Структура: data['grades']['student_db_id']['subject'] = {'date': 'grade'}
+    user_grades = all_data.get('grades', {}).get(db_id, {})
+    
+    subjects_list = list(user_grades.keys())
+    
+    if not subjects_list:
+        await update.message.reply_text(get_std_msg('no_grades', lang))
+        return STUDENT_MAIN # Остаемся в главном меню
+        
+    await update.message.reply_text(
+        get_std_msg('grades_menu', lang),
+        reply_markup=kb.generate_subjects_keyboard(subjects_list, lang)
+    )
+    return STUDENT_GRADES
+
+async def handle_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Переводит в меню 'Настройки'."""
+    lang, user_info, _ = get_user_data(context)
+    await update.message.reply_text(
+        get_std_msg('settings_menu', lang),
+        reply_markup=kb.generate_settings_keyboard(user_info, lang)
+    )
+    return STUDENT_SETTINGS
+
+# --- 2. Обработчики меню 'Расписание' (STUDENT_SCHEDULE) ---
+def _format_schedule_for_day(schedule_data, day_name_key, lang):
+    """Вспомогательная функция форматирования расписания."""
+    if not schedule_data:
+        return "  (Нет уроков)"
+    
+    day_name = get_std_msg(day_name_key, lang)
+    lines = [f"<b>{day_name}</b>:"]
+    # Сортируем уроки по номеру (ключ '1', '2', ...)
+    for lesson_num in sorted(schedule_data.keys(), key=lambda x: int(x)):
+        lesson_name = schedule_data[lesson_num]
+        lines.append(f"  {lesson_num}. {lesson_name}")
+    return "\n".join(lines)
+
+
+async def show_schedule_tomorrow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Показывает расписание на завтра."""
+    lang, user_info, _ = get_user_data(context)
+    
+    # Определение класса ученика
+    user_class = user_info.get('class')
+    user_letter = user_info.get('letter')
+    if not user_class or not user_letter:
+        await update.message.reply_text("Ошибка: Ваш класс не указан в профиле.")
+        return STUDENT_SCHEDULE
+        
+    class_key = f"{user_class}{user_letter}"
+    
+    # Загрузка расписания
+    schedule_db = db.get_schedule()
+    class_schedule = schedule_db.get(class_key)
+    
+    if not class_schedule:
+        await update.message.reply_text(get_std_msg('schedule_not_found', lang).format(class_letter=class_key))
+        return STUDENT_SCHEDULE
+        
+    # Определение завтрашнего дня (TODO: Учесть часовой пояс Asia/Tashkent)
+    import datetime
+    # Временное решение:
+    tomorrow = datetime.date.today() + datetime.timedelta(days=1)
+    day_of_week_index = tomorrow.weekday() # 0 = Понедельник, 6 = Воскресенье
+    
+    day_keys = ['day_monday', 'day_tuesday', 'day_wednesday', 'day_thursday', 'day_friday', 'day_saturday', 'day_sunday']
+    day_db_keys = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+    
+    tomorrow_key = day_db_keys[day_of_week_index]
+    tomorrow_name_key = day_keys[day_of_week_index]
+    
+    schedule_for_tomorrow = class_schedule.get(tomorrow_key, {})
+    
+    # Форматирование
+    formatted_schedule = _format_schedule_for_day(schedule_for_tomorrow, tomorrow_name_key, lang)
+    
+    await update.message.reply_text(
+        get_std_msg('schedule_tomorrow_title', lang).format(day_name=get_std_msg(tomorrow_name_key, lang)) + "\n" + formatted_schedule,
+        parse_mode='HTML'
+    )
+    return STUDENT_SCHEDULE
+
+async def show_schedule_full(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Показывает полное расписание."""
+    lang, user_info, _ = get_user_data(context)
+    
+    user_class = user_info.get('class')
+    user_letter = user_info.get('letter')
+    class_key = f"{user_class}{user_letter}"
+    
+    schedule_db = db.get_schedule()
+    class_schedule = schedule_db.get(class_key)
+    
+    if not class_schedule:
+        await update.message.reply_text(get_std_msg('schedule_not_found', lang).format(class_letter=class_key))
+        return STUDENT_SCHEDULE
+
+    day_keys = ['day_monday', 'day_tuesday', 'day_wednesday', 'day_thursday', 'day_friday', 'day_saturday', 'day_sunday']
+    day_db_keys = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+    
+    full_schedule_lines = [get_std_msg('schedule_full_title', lang).format(class_letter=class_key)]
+    
+    for i in range(len(day_db_keys)):
+        day_db_key = day_db_keys[i]
+        day_name_key = day_keys[i]
+        day_schedule = class_schedule.get(day_db_key, {})
+        full_schedule_lines.append(_format_schedule_for_day(day_schedule, day_name_key, lang))
+        
+    await update.message.reply_text("\n\n".join(full_schedule_lines), parse_mode='HTML')
+    return STUDENT_SCHEDULE
+
+
+# --- 3. Обработчики меню 'Оценки' (STUDENT_GRADES) ---
+
+async def show_grades_for_subject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Показывает список оценок по выбранному предмету."""
+    query = update.callback_query
+    await query.answer()
+    
+    lang, _, db_id = get_user_data(context)
+    
+    try:
+        subject = query.data.split('grade_subj_')[-1]
+    except Exception:
+        await query.edit_message_text("Ошибка: не удалось распознать предмет.")
+        return STUDENT_GRADES
+        
+    all_data = db.get_app_data()
+    user_grades = all_data.get('grades', {}).get(db_id, {})
+    subject_grades = user_grades.get(subject, {}) # {'date': 'grade'}
+    
+    if not subject_grades:
+        await query.edit_message_text(get_std_msg('no_grades', lang))
+        return STUDENT_GRADES
+        
+    # Форматирование
+    lines = [get_std_msg('grades_title', lang).format(subject=subject)]
+    # Сортируем по дате (предполагая формат 'YYYY-MM-DD' или 'DD.MM.YYYY')
+    # Простая сортировка
+    try:
+        sorted_dates = sorted(subject_grades.keys())
+    except Exception:
+        sorted_dates = subject_grades.keys() # Без сортировки, если даты смешанные
+
+    for date in sorted_dates:
+        grade = subject_grades[date]
+        lines.append(get_std_msg('grades_line', lang).format(date=date, grade=grade))
+    
+    # Обновляем сообщение, добавляя кнопку "Назад к списку"
+    subjects_list = list(user_grades.keys())
+    await query.edit_message_text(
+        "\n".join(lines),
+        reply_markup=kb.generate_subjects_keyboard(subjects_list, lang), # Снова показываем список предметов
+        parse_mode='HTML'
+    )
+    
+    return STUDENT_GRADES
+
+
+# --- 4. Обработчики меню 'Настройки' (STUDENT_SETTINGS) ---
+
+async def _toggle_setting(update: Update, context: ContextTypes.DEFAULT_TYPE, setting_key: str) -> str:
+    """Вспомогательная функция для переключения настроек (True/False)."""
+    query = update.callback_query
+    await query.answer()
+    
+    lang, user_info, db_id = get_user_data(context)
+    
+    # 1. Инвертируем значение
+    current_value = user_info.get(setting_key, False)
+    new_value = not current_value
+    user_info[setting_key] = new_value
+    
+    # 2. Обновляем context
+    context.user_data['user_info'] = user_info
+    
+    # 3. Сохраняем в БД (users.json)
+    all_students = db.get_all_students()
+    if db_id in all_students:
+        all_students[db_id][setting_key] = new_value
+        db.save_all_students(all_students)
+    else:
+        logger.error(f"Не удалось сохранить настройку {setting_key} для {db_id}. Пользователь не найден.")
+        
+    # 4. Обновляем клавиатуру
+    await query.edit_message_reply_markup(
+        reply_markup=kb.generate_settings_keyboard(user_info, lang)
+    )
+    
+    return STUDENT_SETTINGS
+
+async def toggle_next_lesson(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Переключает 'warning_about_next_lesson'."""
+    return await _toggle_setting(update, context, 'warning_about_next_lesson')
+
+async def toggle_daily_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Переключает 'warning_everyday_about_lessons'."""
+    return await _toggle_setting(update, context, 'warning_everyday_about_lessons')
+
+async def start_change_login(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Начинает процесс смены логина/пароля."""
+    query = update.callback_query
+    await query.answer()
+    lang, _, _ = get_user_data(context)
+    
+    # Удаляем Inline-клавиатуру
     await query.delete_message()
     
     await query.message.reply_text(
-        # ИЗМЕНЕНО: Используем get_text
-        get_text(lang, 'main_menu'),
-        # ИЗМЕНЕНО: Передаем lang в клавиатуру
-        reply_markup=keyboards.get_student_main_menu(lang)
+        get_std_msg('settings_prompt_login', lang),
+        parse_mode='HTML'
     )
-    return STATE_MENU_STUDENT
+    return STUDENT_SETTINGS_CHANGE_LOGIN
 
-async def send_schedule_tomorrow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Отправляет расписание на завтра."""
-    # ИЗМЕНЕНО: Получаем lang
-    lang = context.user_data.get('lang', 'uz')
-    class_id = context.user_data.get("class_id")
+# --- 5. Смена логина/пароля ---
+
+async def receive_new_login(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Получает новый логин, запрашивает пароль."""
+    lang, _, _ = get_user_data(context)
+    new_login = update.message.text
     
-    day_key = get_day_of_week_str('tomorrow')
-    tomorrow_date = (datetime.now(TZ) + timedelta(days=1)).strftime('%d.%m.%Y')
+    if len(new_login.split()) > 1:
+        await update.message.reply_text("Логин не должен содержать пробелов. Попробуйте еще раз.")
+        return STUDENT_SETTINGS_CHANGE_LOGIN
+
+    context.user_data['new_login'] = new_login.lower()
     
-    schedule = db_handler.get_schedule_for_class(class_id)
-    # ИЗМЕНЕНО: Используем get_text для запасного варианта
-    lessons_list = schedule.get(day_key, [get_text(lang, 'no_lessons_tomorrow')])
-    lessons_str = "\n".join(lessons_list)
-    
-    # ИЗМЕНЕНО: Используем get_text для форматирования
-    text = get_text(lang, 'schedule_for_tomorrow').format(
-        class_id=class_id, 
-        day_key=day_key.capitalize(), 
-        date=tomorrow_date, 
-        lessons=lessons_str
+    await update.message.reply_text(
+        get_std_msg('settings_prompt_pass', lang).format(login=new_login),
+        parse_mode='HTML'
     )
+    return STUDENT_SETTINGS_CHANGE_PASS
     
-    await update.message.reply_text(text)
-    return STATE_STUDENT_SCHEDULE
+async def receive_new_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Получает новый пароль, сохраняет и возвращает в гл. меню."""
+    lang, user_info, db_id = get_user_data(context)
+    
+    new_pass = update.message.text
+    new_login = context.user_data.pop('new_login', None)
+    
+    if not new_login:
+        logger.warning(f"Ошибка смены пароля: new_login не найден в context. {db_id}")
+        await update.message.reply_text("Произошла ошибка, попробуйте снова.")
+        return await back_to_main(update, context)
 
-async def send_schedule_full(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Отправляет полное расписание."""
-    # ИЗМЕНЕНО: Получаем lang
-    lang = context.user_data.get('lang', 'uz')
-    class_id = context.user_data.get("class_id")
-    schedule = db_handler.get_schedule_for_class(class_id)
+    # 1. Обновляем user_info
+    user_info['username'] = new_login
+    user_info['password'] = new_pass
+    context.user_data['user_info'] = user_info
     
-    if not schedule:
-        # ИЗМЕНЕНО: Используем get_text
-        await update.message.reply_text(get_text(lang, 'schedule_full_empty').format(class_id=class_id))
-        return STATE_STUDENT_SCHEDULE
-
-    # ИЗМЕНЕНО: Используем get_text
-    text = get_text(lang, 'schedule_full_header').format(class_id=class_id)
-    days_order = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
-    
-    found_lessons = False
-    for day in days_order:
-        lessons = schedule.get(day)
-        if lessons:
-            found_lessons = True
-            text += f"\n*{day.capitalize()}*:\n" + "\n".join(lessons) + "\n"
-        
-    if not found_lessons:
-        # ИЗМЕНЕНО: Используем get_text
-        text = get_text(lang, 'schedule_full_empty').format(class_id=class_id)
-
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
-    return STATE_STUDENT_SCHEDULE
-
-async def send_grades_for_subject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Отправляет оценки по выбранному предмету."""
-    # ИЗМЕНЕНО: Получаем lang
-    lang = context.user_data.get('lang', 'uz')
-    query = update.callback_query
-    await query.answer()
-    
-    subject = query.data.split("_", 1)[1]
-    username = context.user_data.get("username")
-    grades = db_handler.get_grades_by_subject(username, subject)
-    
-    if not grades:
-        # ИЗМЕНЕНО: Используем get_text
-        text = get_text(lang, 'no_grades_for_subject').format(subject=subject)
+    # 2. Сохраняем в БД
+    all_students = db.get_all_students()
+    if db_id in all_students:
+        all_students[db_id]['username'] = new_login
+        all_students[db_id]['password'] = new_pass
+        db.save_all_students(all_students)
     else:
-        # ИЗМЕНЕНО: Используем get_text
-        text = get_text(lang, 'grades_for_subject').format(subject=subject, grades="\n".join(grades))
-    
-    await query.edit_message_text(text, reply_markup=query.message.reply_markup)
-    return STATE_STUDENT_GRADES
-
-# --- Обработка настроек ---
-
-async def toggle_notification(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Переключает настройку уведомлений."""
-    # ИЗМЕНЕНО: Получаем lang
-    lang = context.user_data.get('lang', 'uz')
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = update.effective_user.id
-    key = query.data.split("_", 1)[1] # notify_lesson или notify_schedule
-    
-    current_settings = db_handler.get_user_settings(user_id)
-    new_value = not current_settings.get(key, False)
-    db_handler.update_user_settings(user_id, key, new_value)
-    
-    # Обновляем клавиатуру
-    new_settings = db_handler.get_user_settings(user_id)
-    # ИЗМЕНЕНО: Передаем lang в клавиатуру
-    await query.edit_message_reply_markup(reply_markup=keyboards.get_settings_keyboard(new_settings, lang))
-    
-    # ИЗМЕНЕНО: Используем get_text
-    if key == 'notify_lesson' and new_value:
-        await query.message.reply_text(get_text(lang, 'notify_lesson_toggled_on'), reply_markup=None) # type: ignore
-    elif key == 'notify_schedule' and new_value:
-         await query.message.reply_text(get_text(lang, 'notify_schedule_toggled_on'), reply_markup=None) # type: ignore
-    
-    return STATE_STUDENT_SETTINGS
-
-
-async def change_credentials(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Запрашивает новый логин и пароль."""
-    # ИЗМЕНЕНО: Получаем lang
-    lang = context.user_data.get('lang', 'uz')
-    query = update.callback_query
-    await query.answer()
-    await query.delete_message()
-    
-    # ИЗМЕНЕНО: Используем get_text
-    await query.message.reply_text(
-        get_text(lang, 'ask_new_credentials'),
-        parse_mode=ParseMode.MARKDOWN
-    )
-    return STATE_SETTINGS_CHANGE_CREDS
-
-async def update_credentials(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обновляет логин и пароль."""
-    # ИЗМЕНЕНО: Получаем lang
-    lang = context.user_data.get('lang', 'uz')
-    parts = update.message.text.split()
-    
-    if len(parts) != 2:
-        # ИЗМЕНЕНО: Используем get_text
-        await update.message.reply_text(get_text(lang, 'invalid_credentials_format'))
-        return STATE_SETTINGS_CHANGE_CREDS
+        logger.error(f"Не удалось сохранить новый логин/пароль для {db_id}.")
         
-    new_username, new_password = parts[0], parts[1]
-    current_username = context.user_data.get("username")
+    await update.message.reply_text(get_std_msg('settings_changed_success', lang))
     
-    success, message = db_handler.update_user_credentials(current_username, new_username, new_password)
+    return await back_to_main(update, context)
+
+async def cancel_change_login(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Отменяет смену логина/пароля."""
+    lang, _, _ = get_user_data(context)
+    context.user_data.pop('new_login', None)
     
-    if success:
-        # ИЗМЕНЕНО: Используем get_text
-        await update.message.reply_text(get_text(lang, 'credentials_updated_success'))
-        context.user_data["username"] = new_username.lower() # Обновляем в сессии
-    else:
-        # ИЗМЕНЕНО: Используем get_text
-        await update.message.reply_text(get_text(lang, 'credentials_update_error').format(message=message))
-        return STATE_SETTINGS_CHANGE_CREDS
-        
-    return await back_to_main_menu(update, context)
+    await update.message.reply_text(get_std_msg('settings_change_cancelled', lang))
+    return await back_to_main(update, context)

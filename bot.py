@@ -1,330 +1,663 @@
 import logging
-import json
+import os
 from telegram import Update, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
+    ApplicationBuilder,
     CommandHandler,
+    ContextTypes,
+    ConversationHandler,
     CallbackQueryHandler,
     MessageHandler,
     filters,
-    ContextTypes,
-    ConversationHandler,
-    PicklePersistence,
 )
-from telegram.constants import ParseMode
-from datetime import time
-# ИЗМЕНЕНО: Убраны импорты, которые теперь не нужны
-from datetime import datetime, timedelta
-# import pytz
 
-from localization import get_text 
-from states import *
-import utils
-import config
-import keyboards
-import db_handler
-import student
-import teacher  # Оставляем импорт, но не будем использовать
-import admin    # Оставляем импорт, но не будем использовать
+import database as db
+import keyboards as kb
 
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# --- JobQueue (Уведомления) ---
-# ... (функции send_daily_schedule_job, check_upcoming_lessons_job, clear_sent_notifications_job остаются БЕЗ ИЗМЕНЕНИЙ) ...
-async def send_daily_schedule_job(context: ContextTypes.DEFAULT_TYPE):
-    logger.info("Running daily schedule job...")
-    all_settings = db_handler.get_all_user_settings()
-    user_data_persistence = await context.application.persistence.get_user_data()
-
-    day_str = utils.get_day_of_week_str('today')
+(
+    SELECT_LANG, 
+    SELECT_ROLE, 
+    LOGIN, 
+    MAIN_MENU,
+    STUDENT_MAIN,
+    TEACHER_MAIN,
+    ADMIN_MAIN,
     
-    for user_id_str, settings in all_settings.items():
-        if not settings.get("notify_schedule"):
-            continue
-
-        try:
-            user_id = int(user_id_str)
-            user_data = user_data_persistence.get(user_id)
-            
-            if not user_data:
-                logger.warning(f"No persistence data found for user {user_id} for daily schedule.")
-                continue
-            
-            lang = user_data.get('lang', 'uz') 
-            role = user_data.get("role")
-            
-            # ИЗМЕНЕНО: Логика для учителя/админа больше не нужна для этого job
-            if role not in ["student", "parent"]:
-                 continue # Пропускаем, так как мы тестируем только учеников
-
-            text = get_text(lang, 'notify_daily_schedule_header').format(day_key=day_str.capitalize())
-            lessons = []
-
-            class_id = user_data.get("class_id")
-            if not class_id:
-                continue
-            schedule = db_handler.get_schedule_for_class(class_id)
-            lessons = schedule.get(day_str, [get_text(lang, 'no_lessons_today')])
-            
-            if lessons:
-                text += "\n".join(lessons)
-                await context.bot.send_message(chat_id=user_id, text=text)
-
-        except Exception as e:
-            logger.error(f"Failed to send daily schedule to user {user_id_str}: {e}")
-
-async def check_upcoming_lessons_job(context: ContextTypes.DEFAULT_TYPE):
-    # ... (логика времени не меняется) ...
-    now = datetime.now(utils.TZ)
-    check_time_min = (now + timedelta(minutes=14)).time()
-    check_time_max = (now + timedelta(minutes=15)).time()
-    day_str = utils.get_day_of_week_str('today')
+    # Состояния студентов (из student.py)
+    STUDENT_SCHEDULE,
+    STUDENT_GRADES,
+    STUDENT_SETTINGS,
+    STUDENT_SETTINGS_CHANGE_LOGIN,
+    STUDENT_SETTINGS_CHANGE_PASS,
     
-    if 'sent_lesson_notifications' not in context.bot_data:
-        context.bot_data['sent_lesson_notifications'] = set()
-
-    all_settings = db_handler.get_all_user_settings()
-    user_data_persistence = await context.application.persistence.get_user_data()
-
-    for user_id_str, settings in all_settings.items():
-        if not settings.get("notify_lesson"):
-            continue
-
-        try:
-            user_id = int(user_id_str)
-            user_data = user_data_persistence.get(user_id)
-            
-            if not user_data:
-                continue
-            
-            lang = user_data.get('lang', 'uz')
-            role = user_data.get("role")
-            schedule = {}
-            
-            # ИЗМЕНЕНО: Логика для учителя/админа больше не нужна для этого job
-            if role in ["student", "parent"]:
-                class_id = user_data.get("class_id")
-                if class_id:
-                    schedule = db_handler.get_schedule_for_class(class_id)
-            else:
-                continue # Пропускаем
-
-            today_lessons = schedule.get(day_str, [])
-            
-            for lesson_str in today_lessons:
-                lesson_time_str = db_handler.parse_lesson_time(lesson_str)
-                if not lesson_time_str:
-                    continue
-                
-                lesson_start_time = datetime.strptime(lesson_time_str, '%H:%M').time()
-                
-                if check_time_min <= lesson_start_time <= check_time_max:
-                    notification_key = (user_id, day_str, lesson_time_str)
-                    
-                    if notification_key not in context.bot_data['sent_lesson_notifications']:
-                        await context.bot.send_message(
-                            chat_id=user_id,
-                            text=get_text(lang, 'notify_lesson_upcoming').format(lesson_str=lesson_str)
-                        )
-                        context.bot_data['sent_lesson_notifications'].add(notification_key)
-
-        except Exception as e:
-            logger.error(f"Failed to check lessons for user {user_id_str}: {e}")
-
-async def clear_sent_notifications_job(context: ContextTypes.DEFAULT_TYPE):
-    if 'sent_lesson_notifications' in context.bot_data:
-        context.bot_data['sent_lesson_notifications'].clear()
-    logger.info("Cleared sent lesson notifications cache.")
-
-
-# --- Хендлеры ---
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user = update.effective_user
-    logger.info(f"User {user.username} (ID: {user.id}) started the bot.")
+    # Состояния учителя (из teacher.py)
+    TEACHER_SCHEDULE,
+    TEACHER_ATTENDANCE_SELECT_CLASS,
+    TEACHER_ATTENDANCE_SELECT_LETTER,
+    TEACHER_ATTENDANCE_MARK_STUDENT,
+    TEACHER_GRADES_SELECT_CLASS,
+    TEACHER_GRADES_SELECT_LETTER,
+    TEACHER_GRADES_SELECT_STUDENT,
+    TEACHER_GRADES_MARK_STUDENT,
+    TEACHER_SETTINGS,
+    TEACHER_SETTINGS_CHANGE_LOGIN,
+    TEACHER_SETTINGS_CHANGE_PASS,
     
-    context.user_data.clear()
+    # Состояния Админа (из admin.py)
+    ADMIN_REGISTER_STEP_1_NAME,
+    ADMIN_REGISTER_STEP_2_LASTNAME,
+    ADMIN_REGISTER_STEP_3_CLASS,
+    ADMIN_REGISTER_STEP_4_LETTER,
+    ADMIN_REGISTER_STEP_5_LOGIN,
+    ADMIN_REGISTER_STEP_6_PASS,
+    ADMIN_EDIT_SCHEDULE
     
-    await update.message.reply_text(
-        get_text('ru', 'welcome'),
-        reply_markup=keyboards.get_language_keyboard(),
-    )
-    return STATE_LANG
+) = map(str, range(30)) # <--- ИЗМЕНЕНО (было 23, добавили 7 состояний)
 
-# ИЗМЕНЕНО: Эта функция теперь "логинит" пользователя как ученика
-async def handle_language_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    
-    lang = query.data.split("_")[1]
-    context.user_data["lang"] = lang
-    
-    # --- Логика авто-логина ---
-    user = update.effective_user
-    role = "student" # Жестко задаем роль
-    username = user.username if user.username else f"test_user_{user.id}"
+import student 
+import teacher 
+import admin
 
-    context.user_data["role"] = role
-    context.user_data["user_id"] = user.id
-    context.user_data["username"] = username.lower()
-    # Создаем фейковые данные
-    context.user_data["user_details"] = {
-        "password": "test_mode",
-        "role": role,
-        "full_name": user.full_name or "Test User"
+# --- Тексты сообщений (Локализация) ---
+MESSAGES = {
+    'ru': {
+        'welcome': "Здравствуйте! 👋\n\nПожалуйста, выберите ваш язык:",
+        'select_role': "Отлично! Теперь выберите вашу роль:",
+        'prompt_login': "Пожалуйста, введите ваш <b>логин</b> и <b>пароль</b>.\n\n"
+                        "Вы можете отправить их:\n"
+                        "• Двумя сообщениями (сначала логин, потом пароль)\n"
+                        "• Одним сообщением (<code>логин пароль</code>)",
+        'login_failed': "❌ Неверный логин или пароль.\n\nПопробуйте еще раз. Введите логин и пароль.",
+        'login_success': "✅ Вход выполнен успешно!",
+        'hello_user': "Здравствуйте, {first_name}!",
+        'login_part1_received': "Хорошо, теперь введите вторую часть (логин или пароль).",
+        # --- Добавлены сообщения для главного меню --- <--- ДОБАВЛЕНО
+        'student_main_menu': "<b>Главное меню ученика</b>\n\nВыберите действие:",
+        'teacher_main_menu': "<b>Главное меню учителя</b>\n\nВыберите действие:",
+        'admin_main_menu': "<b>Панель администрации</b>\n\nВыберите действие:",
+    },
+    'en': {
+        'welcome': "Hello! 👋\n\nPlease select your language:",
+        'select_role': "Great! Now select your role:",
+        'prompt_login': "Please enter your <b>username</b> and <b>password</b>.\n\n"
+                        "You can send them as:\n"
+                        "• Two messages (username first, then password)\n"
+                        "• One message (<code>username password</code>)",
+        'login_failed': "❌ Invalid username or password.\n\nPlease try again. Enter your username and password.",
+        'login_success': "✅ Login successful!",
+        'hello_user': "Hello, {first_name}!",
+        'login_part1_received': "OK, now enter the second part (username or password).",
+        # --- Добавлены сообщения для главного меню --- <--- ДОБАВЛЕНО
+        'student_main_menu': "<b>Student's Main Menu</b>\n\nSelect an action:",
+        'teacher_main_menu': "<b>Teacher's Main Menu</b>\n\nSelect an action:",
+        'admin_main_menu': "<b>Admin Panel</b>\n\nSelect an action:",
+    },
+    'uz': {
+        'welcome': "Assalomu alaykum! 👋\n\nIltimos, tilingizni tanlang:",
+        'select_role': "Ajoyib! Endi rolingizni tanlang:",
+        'prompt_login': "Iltimos, <b>login</b> va <b>parolingizni</b> kiriting.\n\n"
+                        "Siz ularni yuborishingiz mumkin:\n"
+                        "• Ikkita xabarda (avval login, keyin parol)\n"
+                        "• Bitta xabarda (<code>login parol</code>)",
+        'login_failed': "❌ Noto'g'ri login yoki parol.\n\nQayta urinib ko'ring. Login va parolni kiriting.",
+        'login_success': "✅ Tizimga kirish muvaffaqiyatli!",
+        'hello_user': "Assalomu alaykum, {first_name}!",
+        'login_part1_received': "Yaxshi, endi ikkinchi qismni (login yoki parolni) kiriting.",
+        # --- Добавлены сообщения для главного меню --- <--- ДОБАВЛЕНО
+        'student_main_menu': "<b>O'quvchi asosiy menyusi</b>\n\nAmalni tanlang:",
+        'teacher_main_menu': "<b>O'qituvchi asosiy menyusi</b>\n\nAmalni tanlang:",
+        'admin_main_menu': "<b>Ma'muriyat paneli</b>\n\nAmalni tanlang:",
     }
+}
+
+def get_msg(key, lang='ru'):
+    """Вспомогательная функция для получения текста сообщения."""
+    return MESSAGES.get(lang, MESSAGES['ru']).get(key, f"_{key}_")
+
+# --- 1. /start ---
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """
+    Обрабатывает команду /start.
+    Проверяет, вошел ли пользователь в систему.
+    Если да -> в главное меню.
+    Если нет -> предлагает выбрать язык.
+    """
+    user = update.effective_user
+    telegram_id = str(user.id)
     
-    logger.info(f"Test user {username} (ID: {user.id}) auto-logged in as {role}.")
-    
-    # Сразу переходим к выбору класса, минуя STATE_LOGIN
-    await query.edit_message_text(
-        get_text(lang, 'login_success_class'), 
-        reply_markup=keyboards.get_class_number_keyboard()
+    # Очищаем context.user_data от старых попыток входа
+    context.user_data.clear()
+
+    # 1. Проверяем, есть ли пользователь уже в нашей БД
+    user_data, role = db.get_user_by_telegram_id(telegram_id)
+
+    if user_data and role:
+        # 2. Пользователь найден (уже вошел ранее)
+        lang = user_data.get('lang', 'ru')
+        context.user_data['user_info'] = user_data
+        context.user_data['role'] = role
+        context.user_data['lang'] = lang
+        
+        await update.message.reply_text(
+            get_msg('hello_user', lang).format(first_name=user_data.get('first_name', '')),
+            parse_mode='HTML'
+        )
+        return await route_to_main_menu(update, context, user_data, role, lang)
+
+    # 3. Новый пользователь / Пользователь вышел
+    await update.message.reply_text(
+        get_msg('welcome', 'ru'), # Приветствие всегда на всех языках
+        reply_markup=kb.get_language_keyboard()
     )
-    return STATE_CLASS_SELECT
+    return SELECT_LANG
 
-# ИЗМЕНЕНО: ЭТА ФУНКЦИЯ БОЛЬШЕ НЕ НУЖНА
-# async def handle_login(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-#     ... (весь код удален)
+# --- 2. Выбор языка (Callback) ---
 
-
-async def handle_class_number(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    # ... (эта функция не меняется) ...
+async def select_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """
+    Сохраняет язык, выбранный на Inline-клавиатуре.
+    Предлагает выбрать роль.
+    """
     query = update.callback_query
     await query.answer()
-    lang = context.user_data.get("lang", "uz")
-    
-    class_num = query.data.split("_")[1]
-    context.user_data["class_num"] = class_num
-    
-    available_letters = db_handler.get_class_letters(class_num)
-    if not available_letters:
-        await query.edit_message_text(get_text(lang, 'class_letters_not_found'))
-        return STATE_CLASS_SELECT
+
+    lang = query.data.split('_')[-1] # 'set_lang_ru' -> 'ru'
+    context.user_data['lang'] = lang
+
+    # 1. Редактируем сообщение, убирая кнопки языка
+    lang_text = "O'zbekcha"
+    if lang == 'ru':
+        lang_text = "Русский"
+    elif lang == 'en':
+        lang_text = "English"
 
     await query.edit_message_text(
-        get_text(lang, 'class_num_selected').format(class_num=class_num),
-        reply_markup=keyboards.get_class_letter_keyboard(available_letters)
+        text=f"Выбран язык: {lang_text} ✅", # Подтверждаем выбор
+        reply_markup=None  # <--- ИСПРАВЛЕНИЕ 1: Убираем inline-клавиатуру
     )
-    return STATE_LETTER_SELECT
 
-async def handle_class_letter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    # ... (эта функция не меняется) ...
-    query = update.callback_query
-    await query.answer()
-    lang = context.user_data.get("lang", "uz")
-    
-    class_letter = query.data.split("_")[1]
-    class_num = context.user_data["class_num"]
-    class_id = f"{class_num}{class_letter}"
-    
-    if not db_handler.get_schedule_for_class(class_id):
-         await query.edit_message_text(get_text(lang, 'class_schedule_not_found').format(class_id=class_id))
-         return STATE_LETTER_SELECT
-
-    context.user_data["class_id"] = class_id
-    logger.info(f"User {context.user_data['username']} selected class {class_id}")
-
-    await query.edit_message_text(get_text(lang, 'class_selected').format(class_id=class_id))
-    
+    # 2. Отправляем НОВОЕ сообщение с Reply-клавиатурой (выбор роли)
     await query.message.reply_text(
-        get_text(lang, 'main_menu'),
-        reply_markup=keyboards.get_student_main_menu(lang)
+        text=get_msg('select_role', lang), # "Отлично! Теперь выберите вашу роль:"
+        reply_markup=kb.get_role_keyboard(lang) # <--- ИСПРАВЛЕНИЕ 2: Отправляем ReplyKeyboard новым сообщением
     )
-    return STATE_MENU_STUDENT
+    
+    return SELECT_ROLE
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    lang = context.user_data.get("lang", "uz")
-    role = context.user_data.get("role")
-    logger.info(f"User {context.user_data.get('username')} cancelled operation.")
+# --- 3. Выбор роли (Text) ---
+
+async def select_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """
+    Сохраняет выбранную роль.
+    Запрашивает логин и пароль.
+    """
+    lang = context.user_data.get('lang', 'ru')
+    role_text = update.message.text
     
-    await update.message.reply_text(get_text(lang, 'action_cancelled'), reply_markup=ReplyKeyboardRemove())
+    # Определяем роль по тексту кнопки
+    role = None
+    if role_text == kb.get_text('role_student', lang):
+        role = 'student'
+    elif role_text == kb.get_text('role_teacher', lang):
+        role = 'teacher'
+    elif role_text == kb.get_text('role_admin', lang):
+        role = 'admin'
     
-    # ИЗМЕНЕНО: Оставляем логику только для ученика
-    if role in ["student", "parent"]:
-        await update.message.reply_text(get_text(lang, 'main_menu'), reply_markup=keyboards.get_student_main_menu(lang))
-        return STATE_MENU_STUDENT
+    if not role:
+        # Пользователь ввел что-то не то, вместо нажатия кнопки
+        await update.message.reply_text(
+            get_msg('select_role', lang),
+            reply_markup=kb.get_role_keyboard(lang)
+        )
+        return SELECT_ROLE
+
+    context.user_data['role'] = role
     
-    # Если роли нет (или она 'teacher'/'admin', которых мы отключили), кидаем на старт
-    return await start(update, context)
+    # Запрашиваем логин/пароль и удаляем Reply-клавиатуру
+    await update.message.reply_text(
+        get_msg('prompt_login', lang),
+        reply_markup=ReplyKeyboardRemove(),
+        parse_mode='HTML'
+    )
+    
+    return LOGIN
+
+# --- 4. Логин (Text) ---
+
+async def try_login(username, password, role, telegram_id, lang):
+    """
+    Внутренняя функция для проверки пары логин/пароль.
+    Возвращает (user_data, db_telegram_id) при успехе
+    или (None, None) при неудаче.
+    """
+    username = username.lower() # Как и просили, приводим к нижнему регистру
+    
+    # Ищем пользователя по username и роли
+    db_telegram_id, user_data = db.find_user_by_username(username, role)
+    
+    if user_data and user_data.get('password') == password:
+        # Успех!
+        # Обновляем/добавляем telegram_id в БД (связываем аккаунт)
+        if str(telegram_id) != str(db_telegram_id):
+            logger.warning(f"ID пользователя {username} изменился. "
+                           f"Старый: {db_telegram_id}, Новый: {telegram_id}")
+            # TODO: Здесь нужна логика переноса данных (если ID меняется)
+            # Пока просто обновляем запись (это рискованно, если юзер зайдет с другого ТГ)
+            # Безопаснее: найти по db_telegram_id, удалить старый ключ, добавить новый
+            pass # Пропускаем обновление ID пока, чтобы не сломать
+        
+        # Обновляем язык пользователя в БД
+        user_data['lang'] = lang
+        
+        # Сохраняем обновленные данные (пока просто в users.json, нужен ID)
+        if role == 'student':
+            all_users = db.get_all_students()
+            all_users[db_telegram_id] = user_data
+            db.save_all_students(all_users)
+        elif role == 'teacher':
+            all_teachers = db.get_all_teachers()
+            all_teachers[db_telegram_id] = user_data
+            db.save_all_teachers(all_teachers)
+        elif role == 'admin':
+            all_admins = db.get_all_admins()
+            all_admins[db_telegram_id] = user_data
+            db.save_all_admins(all_admins)
+            
+        return user_data, db_telegram_id
+        
+    return None, None
+
+async def handle_login_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """
+    Обрабатывает ввод логина/пароля.
+    Гибкая логика: "логин пароль" или "логин", "пароль".
+    """
+    user = update.effective_user
+    telegram_id = str(user.id)
+    lang = context.user_data.get('lang', 'ru')
+    role = context.user_data.get('role')
+    
+    text = update.message.text
+    parts = text.split()
+    
+    pending_part = context.user_data.pop('login_part1', None)
+    
+    user_data = None
+    db_telegram_id = None
+    
+    try:
+        # Пытаемся удалить сообщение пользователя с логином/паролем
+        await update.message.delete()
+    except Exception as e:
+        logger.warning(f"Не удалось удалить сообщение пользователя: {e}")
+
+    if pending_part:
+        # У нас уже была первая часть (логин или пароль)
+        part2 = text
+        # Пробуем обе комбинации
+        user_data, db_telegram_id = await try_login(pending_part, part2, role, telegram_id, lang)
+        if not user_data:
+            user_data, db_telegram_id = await try_login(part2, pending_part, role, telegram_id, lang)
+            
+    elif len(parts) == 2:
+        # Ввели "логин пароль" в одном сообщении
+        # Пробуем обе комбинации (на случай "пароль логин")
+        user_data, db_telegram_id = await try_login(parts[0], parts[1], role, telegram_id, lang)
+        if not user_data:
+            user_data, db_telegram_id = await try_login(parts[1], parts[0], role, telegram_id, lang)
+
+    elif len(parts) == 1:
+        # Ввели только одну часть
+        context.user_data['login_part1'] = parts[0]
+        await update.message.reply_text(get_msg('login_part1_received', lang))
+        return LOGIN # Остаемся в том же состоянии, ждем вторую часть
+        
+    else:
+        # Ввели что-то не то (больше 2 слов или 0)
+        pass # Провалится в if not user_data
+
+    if user_data and db_telegram_id:
+        # --- УСПЕШНЫЙ ВХОД ---
+        context.user_data.clear() # Очищаем (кроме user_info и т.д.)
+        context.user_data['user_info'] = user_data
+        context.user_data['role'] = role
+        context.user_data['lang'] = lang
+        context.user_data['db_id'] = db_telegram_id # Сохраняем ID из нашей БД
+        
+        await update.message.reply_text(get_msg('login_success', lang))
+        
+        await update.message.reply_text(
+            get_msg('hello_user', lang).format(first_name=user_data.get('first_name', ''))
+        )
+        return await route_to_main_menu(update, context, user_data, role, lang)
+        
+    else:
+        # --- НЕУДАЧНЫЙ ВХOD ---
+        context.user_data.pop('login_part1', None) # Сбрасываем ожидание
+        await update.message.reply_text(get_msg('login_failed', lang))
+        # Снова запрашиваем логин
+        await update.message.reply_text(
+            get_msg('prompt_login', lang),
+            parse_mode='HTML'
+        )
+        return LOGIN
+
+# --- 5. Маршрутизация в Главное Меню ---
+
+async def route_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_data, role, lang) -> str:
+    """
+    Отправляет пользователя в его главное меню в зависимости от роли.
+    """
+    if role == 'student':
+        await update.message.reply_text(
+            get_msg('student_main_menu', lang), # <--- ИЗМЕНЕНО
+            reply_markup=kb.get_student_main_keyboard(lang),
+            parse_mode='HTML' # <--- ДОБАВЛЕНО
+        )
+        return STUDENT_MAIN
+        
+    elif role == 'teacher':
+        await update.message.reply_text(
+            get_msg('teacher_main_menu', lang), # <--- ИЗМЕНЕНО
+            reply_markup=kb.get_teacher_main_keyboard(lang),
+            parse_mode='HTML' # <--- ДОБАВЛЕНО
+        )
+        return TEACHER_MAIN
+        
+    elif role == 'admin':
+        await update.message.reply_text(
+            get_msg('admin_main_menu', lang), # <--- ИЗМЕНЕНО
+            reply_markup=kb.get_admin_main_keyboard(lang),
+            parse_mode='HTML' # <--- ДОБАВЛЕНО
+        )
+        return ADMIN_MAIN
+        
+    else:
+        # Неизвестная роль, отправляем в начало
+        return await start(update, context)
+
+
+# --- Обработчики-заглушки (для MAIN_MENU) ---
+# (Они будут заменены импортами из student.py, teacher.py, admin.py)
+
+async def placeholder_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Временный обработчик-заглушка."""
+    lang = context.user_data.get('lang', 'ru')
+    await update.message.reply_text(f"Вы нажали: {update.message.text}\n"
+                                    f"Этот раздел в разработке.",
+                                    reply_markup=update.message.reply_markup) # Оставляем ту же клаву
+    # Возвращаем то же состояние, в котором были
+    role = context.user_data.get('role')
+    if role == 'student': return STUDENT_MAIN
+    if role == 'teacher': return TEACHER_MAIN
+    if role == 'admin': return ADMIN_MAIN
+    return ConversationHandler.END
+
+
+# --- 6. Main ---
 
 def main() -> None:
-
-
-    persistence = PicklePersistence(filepath=config.PERSISTENCE_FILE)
+    """Запуск бота."""
     
-    application = (
-        Application.builder()
-        .token(config.BOT_TOKEN)
-        .persistence(persistence)
-        .build()
-    )
+    # 1. Инициализация БД
+    db.init_database()
+    
+    # 2. Токен
+    # TODO: Вставьте ваш токен
+    TOKEN = "8412482120:AAEiZLLHmTLMf7-2NxPKm0tgq-P1vH55_nA" 
+    if TOKEN == "YOUR_TELEGRAM_BOT_TOKEN_HERE":
+        print("="*50)
+        print("!!! ПОЖАЛУЙСТА, ВСТАВЬТЕ ВАШ TELEGRAM_BOT_TOKEN в bot.py !!!")
+        print("="*50)
+        return
 
-    # ... (JobQueue остается без изменений) ...
-    job_queue = application.job_queue
-    job_queue.run_daily(send_daily_schedule_job, time=time(hour=7, minute=0, tzinfo=utils.TZ), name="daily_schedule")
-    job_queue.run_repeating(check_upcoming_lessons_job, interval=60, first=10, name="check_lessons")
-    job_queue.run_daily(clear_sent_notifications_job, time=time(hour=0, minute=1, tzinfo=utils.TZ), name="clear_notification_cache")
+    # 3. Application
+    application = ApplicationBuilder().token(TOKEN).build()
 
-    # ИЗМЕНHЕНО: ConversationHandler УПРОЩЕН
+    # 4. Conversation Handler (Главная логика)
+    
+    # --- Фильтры для кнопок меню (для всех языков) ---
+    # Мы создаем их здесь, чтобы ConversationHandler был чище
+    
+    # --- Студент ---
+    student_schedule_filter = filters.Text([
+        kb.get_text('main_schedule', 'ru'),
+        kb.get_text('main_schedule', 'en'),
+        kb.get_text('main_schedule', 'uz')
+    ])
+    student_grades_filter = filters.Text([
+        kb.get_text('main_grades', 'ru'),
+        kb.get_text('main_grades', 'en'),
+        kb.get_text('main_grades', 'uz')
+    ])
+    student_settings_filter = filters.Text([
+        kb.get_text('main_settings', 'ru'),
+        kb.get_text('main_settings', 'en'),
+        kb.get_text('main_settings', 'uz')
+    ])
+    student_schedule_tomorrow_filter = filters.Text([
+        kb.get_text('schedule_tomorrow', 'ru'),
+        kb.get_text('schedule_tomorrow', 'en'),
+        kb.get_text('schedule_tomorrow', 'uz')
+    ])
+    student_schedule_full_filter = filters.Text([
+        kb.get_text('schedule_full', 'ru'),
+        kb.get_text('schedule_full', 'en'),
+        kb.get_text('schedule_full', 'uz')
+    ])
+    
+    # Общий фильтр "Назад"
+    back_filter = filters.Text([
+        kb.get_text('back', 'ru'),
+        kb.get_text('back', 'en'),
+        kb.get_text('back', 'uz')
+    ])
+    
+    # --- Учитель --- <--- ДОБАВЛЕНО
+    teacher_schedule_filter = filters.Text([
+        kb.get_text('main_schedule', 'ru'),
+        kb.get_text('main_schedule', 'en'),
+        kb.get_text('main_schedule', 'uz')
+    ])
+    teacher_attendance_filter = filters.Text([
+        kb.get_text('main_attendance', 'ru'),
+        kb.get_text('main_attendance', 'en'),
+        kb.get_text('main_attendance', 'uz')
+    ])
+    teacher_grades_filter = filters.Text([
+        kb.get_text('main_grades', 'ru'),
+        kb.get_text('main_grades', 'en'),
+        kb.get_text('main_grades', 'uz')
+    ])
+    teacher_settings_filter = filters.Text([
+        kb.get_text('main_settings', 'ru'),
+        kb.get_text('main_settings', 'en'),
+        kb.get_text('main_settings', 'uz')
+    ])
+    
+    # Фильтры для расписания учителя (заглушки)
+    teacher_schedule_today_filter = filters.Text(kb.get_text('schedule_today', 'ru')) | \
+                                    filters.Text(kb.get_text('schedule_today', 'en')) | \
+                                    filters.Text(kb.get_text('schedule_today', 'uz'))
+    teacher_schedule_tomorrow_filter = filters.Text(kb.get_text('schedule_tomorrow', 'ru')) | \
+                                       filters.Text(kb.get_text('schedule_tomorrow', 'en')) | \
+                                       filters.Text(kb.get_text('schedule_tomorrow', 'uz'))
+    teacher_schedule_full_filter = filters.Text(kb.get_text('schedule_full', 'ru')) | \
+                                   filters.Text(kb.get_text('schedule_full', 'en')) | \
+                                   filters.Text(kb.get_text('schedule_full', 'uz'))
+    
+    
+    # --- Админ --- <--- ДОБАВЛЕНО
+    admin_register_filter = filters.Text([
+        kb.get_text('admin_reg_student', 'ru'),
+        kb.get_text('admin_reg_student', 'en'),
+        kb.get_text('admin_reg_student', 'uz')
+    ])
+    admin_schedule_filter = filters.Text([
+        kb.get_text('admin_edit_schedule', 'ru'),
+        kb.get_text('admin_edit_schedule', 'en'),
+        kb.get_text('admin_edit_schedule', 'uz')
+    ])
+    
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
+        entry_points=[CommandHandler('start', start)],
         states={
-            # --- Этапы входа (упрощенные) ---
-            STATE_LANG: [
-                CallbackQueryHandler(handle_language_selection, pattern="^lang_"),
+            # --- Логин ---
+            SELECT_LANG: [
+                CallbackQueryHandler(select_language, pattern='^set_lang_')
             ],
-            # ИЗМЕНЕНО: STATE_LOGIN удален
-            STATE_CLASS_SELECT: [
-                CallbackQueryHandler(handle_class_number, pattern="^class_num_"),
+            SELECT_ROLE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, select_role)
             ],
-            STATE_LETTER_SELECT: [
-                CallbackQueryHandler(handle_class_letter, pattern="^class_letter_"),
-            ],
-            
-            # --- Меню Ученика (оставлено) ---
-            STATE_MENU_STUDENT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, student.route_main_menu),
-            ],
-            STATE_STUDENT_SCHEDULE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, student.route_schedule_menu),
-            ],
-            STATE_STUDENT_GRADES: [
-                CallbackQueryHandler(student.send_grades_for_subject, pattern="^subject_"),
-                CallbackQueryHandler(student.back_to_main_menu_inline, pattern="^back_to_main$"),
-            ],
-            STATE_STUDENT_SETTINGS: [
-                CallbackQueryHandler(student.toggle_notification, pattern="^toggle_"),
-                CallbackQueryHandler(student.change_credentials, pattern="^change_creds$"),
-                CallbackQueryHandler(student.back_to_main_menu_inline, pattern="^back_to_main$"),
-            ],
-            STATE_SETTINGS_CHANGE_CREDS: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, student.update_credentials),
+            LOGIN: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_login_input)
             ],
 
-            # ИЗМЕНЕНО: Все состояния Учителя и Админа УДАЛЕНЫ
-            # STATE_MENU_TEACHER: [...],
-            # STATE_TEACHER_SCHEDULE: [...],
-            # ...
-            # STATE_MENU_ADMIN: [...],
-            # STATE_ADMIN_SCHEDULE: [...],
+            # --- Главные меню ---
+            STUDENT_MAIN: [
+                MessageHandler(student_schedule_filter, student.handle_schedule),
+                MessageHandler(student_grades_filter, student.handle_grades),
+                MessageHandler(student_settings_filter, student.handle_settings),
+                CallbackQueryHandler(student.back_to_main_callback, pattern='^back_to_main_menu$'),
+            ],
+            TEACHER_MAIN: [
+                MessageHandler(teacher_schedule_filter, teacher.handle_schedule),
+                MessageHandler(teacher_attendance_filter, teacher.handle_attendance),
+                MessageHandler(teacher_grades_filter, teacher.handle_grades),
+                MessageHandler(teacher_settings_filter, teacher.handle_settings),
+                CallbackQueryHandler(teacher.back_to_main_callback, pattern='^back_to_main_menu$'),
+            ],
+            ADMIN_MAIN: [
+                MessageHandler(admin_register_filter, admin.handle_register_student),
+                MessageHandler(admin_schedule_filter, admin.handle_edit_schedule),
+            ],
+
+            # --- Состояния Ученика ---
+            STUDENT_SCHEDULE: [
+                MessageHandler(student_schedule_tomorrow_filter, student.show_schedule_tomorrow),
+                MessageHandler(student_schedule_full_filter, student.show_schedule_full),
+                MessageHandler(back_filter, student.back_to_main),
+            ],
+            STUDENT_GRADES: [
+                CallbackQueryHandler(student.show_grades_for_subject, pattern='^grade_subj_'),
+                CallbackQueryHandler(student.back_to_main_callback, pattern='^back_to_main_menu$'),
+            ],
+            STUDENT_SETTINGS: [
+                CallbackQueryHandler(student.toggle_next_lesson, pattern='^settings_toggle_next_lesson$'),
+                CallbackQueryHandler(student.toggle_daily_schedule, pattern='^settings_toggle_daily_schedule$'),
+                CallbackQueryHandler(student.start_change_login, pattern='^settings_change_login$'),
+                CallbackQueryHandler(student.back_to_main_callback, pattern='^back_to_main_menu$'),
+            ],
+            STUDENT_SETTINGS_CHANGE_LOGIN: [
+                CommandHandler('cancel', student.cancel_change_login),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, student.receive_new_login),
+            ],
+            STUDENT_SETTINGS_CHANGE_PASS: [
+                CommandHandler('cancel', student.cancel_change_login),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, student.receive_new_password),
+            ],
+
+            # --- Состояния Учителя (Посещаемость) ---
+            TEACHER_SCHEDULE: [
+                MessageHandler(teacher_schedule_today_filter | teacher_schedule_tomorrow_filter | teacher_schedule_full_filter, 
+                               teacher.show_schedule_placeholder),
+                MessageHandler(back_filter, teacher.back_to_main),
+            ],
+            TEACHER_ATTENDANCE_SELECT_LETTER: [
+                CallbackQueryHandler(teacher.select_attendance_class, pattern='^att_class_'),
+                CallbackQueryHandler(teacher.back_to_main_callback, pattern='^back_to_main_menu$'),
+            ],
+            TEACHER_ATTENDANCE_MARK_STUDENT: [
+                CallbackQueryHandler(teacher.select_attendance_letter, pattern='^att_letter_'),
+                CallbackQueryHandler(teacher.select_attendance_student, pattern='^att_student_'),
+                CallbackQueryHandler(teacher.mark_attendance, pattern='^att_(present|absent)$'),
+                CallbackQueryHandler(teacher.select_attendance_class, pattern='^att_letter_back_to_class'), 
+            ],
+            # --- Состояния Учителя (Оценки) ---
+            TEACHER_GRADES_SELECT_LETTER: [
+                CallbackQueryHandler(teacher.select_grades_class, pattern='^grade_class_'),
+                CallbackQueryHandler(teacher.back_to_main_callback, pattern='^back_to_main_menu$'),
+            ],
+            TEACHER_GRADES_SELECT_STUDENT: [
+                CallbackQueryHandler(teacher.select_grades_letter, pattern='^grade_letter_'),
+                CallbackQueryHandler(teacher.select_grades_class, pattern='^grade_letter_back_to_class'), 
+            ],
+            TEACHER_GRADES_MARK_STUDENT: [
+                CallbackQueryHandler(teacher.select_grades_student, pattern='^grade_student_'),
+                CallbackQueryHandler(teacher.set_grade, pattern='^grade_(2|3|4|5)$'),
+                CallbackQueryHandler(teacher.select_grades_letter, pattern='^grade_student_back_to_letter_'), 
+            ],
+            # --- Состояния Учителя (Настройки) ---
+            TEACHER_SETTINGS: [
+                CallbackQueryHandler(teacher.toggle_next_lesson, pattern='^settings_toggle_next_lesson$'),
+                CallbackQueryHandler(teacher.toggle_daily_schedule, pattern='^settings_toggle_daily_schedule$'),
+                CallbackQueryHandler(teacher.start_change_login, pattern='^settings_change_login$'),
+                CallbackQueryHandler(teacher.back_to_main_callback, pattern='^back_to_main_menu$'),
+            ],
+            TEACHER_SETTINGS_CHANGE_LOGIN: [
+                CommandHandler('cancel', teacher.cancel_change_login),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, teacher.receive_new_login),
+            ],
+            TEACHER_SETTINGS_CHANGE_PASS: [
+                CommandHandler('cancel', teacher.cancel_change_login),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, teacher.receive_new_password),
+            ],
+
+            # --- Состояния Админа (Регистрация) ---
+            ADMIN_REGISTER_STEP_1_NAME: [
+                CommandHandler('cancel', admin.cancel_register),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin.register_step_1_name)
+            ],
+            ADMIN_REGISTER_STEP_2_LASTNAME: [
+                CommandHandler('cancel', admin.cancel_register),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin.register_step_2_lastname)
+            ],
+            ADMIN_REGISTER_STEP_3_CLASS: [
+                CommandHandler('cancel', admin.cancel_register),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin.register_step_3_class)
+            ],
+            ADMIN_REGISTER_STEP_4_LETTER: [
+                CommandHandler('cancel', admin.cancel_register),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin.register_step_4_letter)
+            ],
+            ADMIN_REGISTER_STEP_5_LOGIN: [
+                CommandHandler('cancel', admin.cancel_register),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin.register_step_5_login)
+            ],
+            ADMIN_REGISTER_STEP_6_PASS: [
+                CommandHandler('cancel', admin.cancel_register),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin.register_step_6_pass)
+            ],
+
+            # --- Состояния Админа (Расписание) ---
+            ADMIN_EDIT_SCHEDULE: [
+                CommandHandler('cancel', admin.cancel_edit_schedule),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin.receive_schedule_text),
+            ],
         },
-        fallbacks=[CommandHandler("cancel", cancel), CommandHandler("start", start)],
-        persistent=True,
-        name="main_conversation",
+        fallbacks=[
+            CommandHandler('start', start)
+            # Мы убрали /cancel из глобальных fallbacks, 
+            # так как он теперь обрабатывается в каждом состоянии отдельно
+        ],
     )
 
     application.add_handler(conv_handler)
 
-    logger.info("Bot is starting...")
+    # 5. Запуск
+    print("Бот запускается...")
     application.run_polling()
 
-
-if __name__ == "__main__":
-    # ИЗМЕНЕНО: Добавлены импорты для JobQueue, которые были удалены по ошибке
-    # from datetime import datetime, timedelta
-    
+if __name__ == '__main__':
     main()
+
+
+
