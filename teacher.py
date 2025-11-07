@@ -1,5 +1,6 @@
 import logging
 import datetime
+import pytz
 from telegram import Update
 from telegram.ext import (
     ContextTypes,
@@ -15,8 +16,9 @@ from bot import (
     TEACHER_MAIN, 
     ADMIN_MAIN,
     TEACHER_SCHEDULE, 
-    TEACHER_ATTENDANCE_SELECT_CLASS,
+    TEACHER_ATTENDANCE_SELECT_CLASS, 
     TEACHER_ATTENDANCE_SELECT_LETTER, 
+    TEACHER_ATTENDANCE_SELECT_STUDENT, 
     TEACHER_ATTENDANCE_MARK_STUDENT,
     TEACHER_GRADES_SELECT_CLASS, 
     TEACHER_GRADES_SELECT_LETTER,
@@ -48,6 +50,24 @@ MESSAGES = {
         'settings_prompt_pass': "Отлично, логин <code>{login}</code>.\nТеперь введите ваш новый <b>пароль</b>.\n\n(Чтобы отменить, напишите /cancel)",
         'settings_changed_success': "✅ Ваш логин и пароль успешно изменены.",
         'settings_change_cancelled': "Изменение отменено.",
+        'settings_error_login_spaces': "❌ Логин не должен содержать пробелов. Попробуйте еще раз.",
+        'error_student_not_found': "❌ Ошибка: Ученик не найден.",
+        'error_generic': "❌ Произошла ошибка. Попробуйте снова.",
+        'error_teacher_subject_not_found': "❌ Ошибка: ID ученика или предмет учителя не найден. Попробуйте снова.",
+        'teacher_schedule_title': "<b>Ваше полное расписание (Предмет: {subject})</b>",
+        'teacher_schedule_today_title': "<b>Ваше расписание на сегодня ({day_name})</b>",
+        'teacher_schedule_tomorrow_title': "<b>Ваше расписание на завтра ({day_name})</b>",
+        'teacher_schedule_not_found': "Не удалось найти уроки по вашему предмету ({subject}) в расписании.",
+        'teacher_subject_not_set': "❌ Ваш предмет не указан в профиле. Обратитесь к администратору.",
+        'no_lessons_today': "Сегодня у вас нет уроков.",
+        'no_lessons_tomorrow': "Завтра у вас нет уроков.",
+        'day_monday': "Понедельник",
+        'day_tuesday': "Вторник",
+        'day_wednesday': "Среда",
+        'day_thursday': "Четверг",
+        'day_friday': "Пятница",
+        'day_saturday': "Суббота",
+        'day_sunday': "Воскресенье",
     },
     'en': {
         'back_to_main': "Main menu",
@@ -68,6 +88,24 @@ MESSAGES = {
         'settings_prompt_pass': "Great, username is <code>{login}</code>.\nNow enter your new <b>password</b>.\n\n(To cancel, type /cancel)",
         'settings_changed_success': "✅ Your username and password have been successfully changed.",
         'settings_change_cancelled': "Change cancelled.",
+        'settings_error_login_spaces': "❌ Username must not contain spaces. Try again.",
+        'error_student_not_found': "❌ Error: Student not found.",
+        'error_generic': "❌ An error occurred. Please try again.",
+        'error_teacher_subject_not_found': "❌ Error: Student ID or teacher subject not found. Please try again.",
+        'teacher_schedule_title': "<b>Your full schedule (Subject: {subject})</b>",
+        'teacher_schedule_today_title': "<b>Your schedule for today ({day_name})</b>",
+        'teacher_schedule_tomorrow_title': "<b>Your schedule for tomorrow ({day_name})</b>",
+        'teacher_schedule_not_found': "Could not find any lessons for your subject ({subject}) in the schedule.",
+        'teacher_subject_not_set': "❌ Your subject is not specified in your profile. Please contact the administrator.",
+        'no_lessons_today': "You have no lessons today.",
+        'no_lessons_tomorrow': "You have no lessons tomorrow.",
+        'day_monday': "Monday",
+        'day_tuesday': "Tuesday",
+        'day_wednesday': "Wednesday",
+        'day_thursday': "Thursday",
+        'day_friday': "Friday",
+        'day_saturday': "Saturday",
+        'day_sunday': "Sunday",
     },
     'uz': {
         'back_to_main': "Asosiy menyu",
@@ -88,6 +126,24 @@ MESSAGES = {
         'settings_prompt_pass': "Ajoyib, login <code>{login}</code>.\nEndi yangi <b>parolni</b> kiriting.\n\n(Bekor qilish uchun /cancel yozing)",
         'settings_changed_success': "✅ Login va parolingiz muvaffaqiyatli o'zgartirildi.",
         'settings_change_cancelled': "O'zgartirish bekor qilindi.",
+        'settings_error_login_spaces': "❌ Login bo'sh joylarni o'z ichiga olmasligi kerak. Qayta urinib ko'ring.",
+        'error_student_not_found': "❌ Xato: O'quvchi topilmadi.",
+        'error_generic': "❌ Xatolik yuz berdi. Qayta urinib ko'ring.",
+        'error_teacher_subject_not_found': "❌ Xato: O'quvchi IDsi yoki o'qituvchi fani topilmadi. Qayta urinib ko'ring.",
+        'teacher_schedule_title': "<b>Sizning to‘liq dars jadvalingiz (Fan: {subject})</b>",
+        'teacher_schedule_today_title': "<b>Bugungi dars jadvalingiz ({day_name})</b>",
+        'teacher_schedule_tomorrow_title': "<b>Ertangi dars jadvalingiz ({day_name})</b>",
+        'teacher_schedule_not_found': "Sizning faningiz ({subject}) bo‘yicha darslar topilmadi.",
+        'teacher_subject_not_set': "❌ Profilingizda faningiz ko‘rsatilmagan. Administrator bilan bog‘laning.",
+        'no_lessons_today': "Bugun sizda dars yo‘q.",
+        'no_lessons_tomorrow': "Ertaga sizda dars yo‘q.",
+        'day_monday': "Dushanba",
+        'day_tuesday': "Seshanba",
+        'day_wednesday': "Chorshanba",
+        'day_thursday': "Payshanba",
+        'day_friday': "Juma",
+        'day_saturday': "Shanba",
+        'day_sunday': "Yakshanba",
     }
 }
 
@@ -160,7 +216,7 @@ async def handle_attendance(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     classes_dict = _get_all_classes_and_letters()
     
     if not classes_dict:
-        await update.message.reply_text("В базе нет учеников.")
+        await update.message.reply_text(get_tchr_msg('error_generic', lang)) # ИЗМЕНИТЬ
         return TEACHER_MAIN
         
     await update.message.reply_text(
@@ -171,14 +227,14 @@ async def handle_attendance(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             lang=lang
         )
     )
-    return TEACHER_ATTENDANCE_SELECT_LETTER
+    return TEACHER_ATTENDANCE_SELECT_CLASS
 
 async def handle_grades(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
     lang, _, _ = get_user_data(context)
     classes_dict = _get_all_classes_and_letters()
     
     if not classes_dict:
-        await update.message.reply_text("В базе нет учеников.")
+        await update.message.reply_text(get_tchr_msg('error_generic', lang))
         return TEACHER_MAIN
         
     await update.message.reply_text(
@@ -189,7 +245,46 @@ async def handle_grades(update: Update, context: ContextTypes.DEFAULT_TYPE) -> s
             lang=lang
         )
     )
-    return TEACHER_GRADES_SELECT_LETTER
+    return TEACHER_GRADES_SELECT_CLASS
+
+def _get_teacher_schedule(teacher_subject: str) -> dict:
+    all_schedule = db.get_schedule()
+    teacher_schedule = {
+        'monday': [], 'tuesday': [], 'wednesday': [], 
+        'thursday': [], 'friday': [], 'saturday': [], 'sunday': []
+    }
+    
+    if not teacher_subject:
+        return teacher_schedule
+
+    for class_key, class_schedule in all_schedule.items():
+        for day_key, day_schedule in class_schedule.items():
+            if day_key not in teacher_schedule: 
+                continue
+            
+            for lesson_num, subject_name in day_schedule.items():
+                if subject_name == teacher_subject:
+                    try:
+                        num = int(lesson_num)
+                        info_str = f"{class_key} (Урок {lesson_num})"
+                        teacher_schedule[day_key].append((num, info_str))
+                    except ValueError:
+                        continue
+
+    for day_key in teacher_schedule:
+        teacher_schedule[day_key].sort(key=lambda x: x[0])
+        teacher_schedule[day_key] = [info for num, info in teacher_schedule[day_key]]
+
+    return teacher_schedule
+
+def _format_teacher_day(day_lessons: list, day_name: str) -> str:
+    if not day_lessons:
+        return ""
+    
+    lines = [f"<b>{day_name}</b>:"]
+    for lesson_info in day_lessons:
+        lines.append(f"  • {lesson_info}")
+    return "\n".join(lines)
 
 async def handle_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
     lang, user_info, _ = get_user_data(context)
@@ -199,9 +294,65 @@ async def handle_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
     return TEACHER_SETTINGS
 
-async def show_schedule_placeholder(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    lang, _, _ = get_user_data(context)
-    await update.message.reply_text(get_tchr_msg('feature_in_development', lang))
+async def show_teacher_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    lang, user_info, _ = get_user_data(context)
+    teacher_subject = user_info.get('subject')
+    if not teacher_subject:
+        await update.message.reply_text(get_tchr_msg('teacher_subject_not_set', lang))
+        return TEACHER_SCHEDULE
+
+    full_schedule = _get_teacher_schedule(teacher_subject)
+    button_text = update.message.text
+
+    day_keys = ['day_monday', 'day_tuesday', 'day_wednesday', 'day_thursday', 'day_friday', 'day_saturday', 'day_sunday']
+    day_db_keys = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+
+    output_lines = []
+
+    if button_text == kb.get_text('schedule_full', lang):
+        output_lines.append(get_tchr_msg('teacher_schedule_title', lang).format(subject=teacher_subject))
+        has_lessons = False
+
+        for i, day_db in enumerate(day_db_keys):
+            day_name = get_tchr_msg(day_keys[i], lang)
+            day_lessons = full_schedule.get(day_db, [])
+
+            if day_lessons:
+                has_lessons = True
+                output_lines.append(_format_teacher_day(day_lessons, day_name))
+
+        if not has_lessons:
+            await update.message.reply_text(get_tchr_msg('teacher_schedule_not_found', lang).format(subject=teacher_subject))
+            return TEACHER_SCHEDULE
+    else:
+        try:
+            tashkent_time = datetime.datetime.now(pytz.timezone("Asia/Tashkent"))
+        except pytz.exceptions.UnknownTimeZoneError:
+            logger.warning("Часовой пояс Asia/Tashkent не найден, используется UTC.")
+            tashkent_time = datetime.datetime.now(pytz.timezone("UTC"))
+
+        target_date = tashkent_time.date()
+        title_key = 'teacher_schedule_today_title'
+        no_lesson_key = 'no_lessons_today'
+
+        if button_text == kb.get_text('schedule_tomorrow', lang):
+            target_date = target_date + datetime.timedelta(days=1)
+            title_key = 'teacher_schedule_tomorrow_title'
+            no_lesson_key = 'no_lessons_tomorrow'
+
+        day_idx = target_date.weekday()
+        day_db = day_db_keys[day_idx]
+        day_name = get_tchr_msg(day_keys[day_idx], lang)
+
+        output_lines.append(get_tchr_msg(title_key, lang).format(day_name=day_name))
+        day_lessons = full_schedule.get(day_db, [])
+
+        if not day_lessons:
+            output_lines.append(get_tchr_msg(no_lesson_key, lang))
+        else:
+            output_lines.append(_format_teacher_day(day_lessons, day_name))
+
+    await update.message.reply_text("\n\n".join(filter(None, output_lines)), parse_mode='HTML')
     return TEACHER_SCHEDULE
 
 async def select_attendance_class(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
@@ -209,7 +360,16 @@ async def select_attendance_class(update: Update, context: ContextTypes.DEFAULT_
     await query.answer()
     lang, _, _ = get_user_data(context)
     
-    class_num = query.data.split('att_class_')[-1]
+    class_num = ""
+    if query.data.startswith('att_class_'):
+        class_num = query.data.split('att_class_')[-1]
+    elif query.data.startswith('att_student_back_to_letter_'):
+        class_num = query.data.split('_')[-1]
+    
+    if not class_num:
+        await query.edit_message_text(get_tchr_msg('error_generic', lang))
+        return TEACHER_MAIN
+
     classes_dict = _get_all_classes_and_letters()
     letters_list = classes_dict.get(class_num, [])
     
@@ -229,7 +389,18 @@ async def select_attendance_letter(update: Update, context: ContextTypes.DEFAULT
     await query.answer()
     lang, _, _ = get_user_data(context)
     
-    class_num, letter = query.data.split('att_letter_')[-1].split('_')
+    try:
+        class_num, letter = "", ""
+        if query.data.startswith('att_letter_'):
+            class_num, letter = query.data.split('att_letter_')[-1].split('_')
+        elif query.data.startswith('att_mark_back_to_student_list_'):
+             class_num, letter = query.data.split('att_mark_back_to_student_list_')[-1].split('_')
+        else:
+            raise ValueError("Invalid callback data")
+            
+    except ValueError:
+        await query.edit_message_text(get_tchr_msg('error_generic', lang))
+        return TEACHER_MAIN
     
     students_list = _get_students_by_class(class_num, letter)
     
@@ -243,7 +414,7 @@ async def select_attendance_letter(update: Update, context: ContextTypes.DEFAULT
             lang=lang
         )
     )
-    return TEACHER_ATTENDANCE_MARK_STUDENT
+    return TEACHER_ATTENDANCE_SELECT_STUDENT
     
 async def select_attendance_student(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
     query = update.callback_query
@@ -255,17 +426,20 @@ async def select_attendance_student(update: Update, context: ContextTypes.DEFAUL
     all_students = db.get_all_students()
     student_data = all_students.get(student_id)
     if not student_data:
-        await query.edit_message_text("Ошибка: Ученик не найден.")
+        await query.edit_message_text(get_tchr_msg('error_student_not_found', lang)) 
         return TEACHER_MAIN
         
     name = f"{student_data.get('first_name', '')} {student_data.get('last_name', '')}"
+    
+    class_num = student_data.get('class')
+    letter = student_data.get('letter')
     
     context.user_data['selected_student_id'] = student_id
     context.user_data['selected_student_name'] = name
     
     await query.edit_message_text(
         get_tchr_msg('attendance_marking', lang).format(name=name),
-        reply_markup=kb.get_attendance_markup(lang),
+        reply_markup=kb.get_attendance_markup(lang, class_num, letter),
         parse_mode='HTML'
     )
     return TEACHER_ATTENDANCE_MARK_STUDENT
@@ -280,13 +454,13 @@ async def mark_attendance(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     student_name = context.user_data.pop('selected_student_name', 'N/A')
     
     if not student_id:
-        await query.edit_message_text("Ошибка: ID ученика не найден. Попробуйте снова.")
+        await query.edit_message_text(get_tchr_msg('error_generic', lang)) # ИЗMENIT
         return TEACHER_MAIN
         
     status_text = 'present' if status == 'att_present' else 'absent'
     status_icon = '✅' if status == 'att_present' else '❌'
     
-    today_str = datetime.date.today().isoformat()
+    today_str = datetime.datetime.now(pytz.timezone("Asia/Tashkent")).date().isoformat()
     
     app_data = db.get_app_data()
     if 'attendance' not in app_data:
@@ -304,12 +478,22 @@ async def mark_attendance(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     
     return await back_to_main_callback(update, context)
 
+
 async def select_grades_class(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
     query = update.callback_query
     await query.answer()
     lang, _, _ = get_user_data(context)
     
-    class_num = query.data.split('grade_class_')[-1]
+    class_num = ""
+    if query.data.startswith('grade_class_'):
+        class_num = query.data.split('grade_class_')[-1]
+    elif query.data.startswith('grade_student_back_to_letter_'):
+        class_num = query.data.split('_')[-1]
+
+    if not class_num:
+        await query.edit_message_text(get_tchr_msg('error_generic', lang))
+        return TEACHER_MAIN
+
     classes_dict = _get_all_classes_and_letters()
     letters_list = classes_dict.get(class_num, [])
     
@@ -329,7 +513,18 @@ async def select_grades_letter(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
     lang, _, _ = get_user_data(context)
     
-    class_num, letter = query.data.split('grade_letter_')[-1].split('_')
+    class_num, letter = "", ""
+    try:
+        if query.data.startswith('grade_letter_'):
+            class_num, letter = query.data.split('grade_letter_')[-1].split('_')
+        elif query.data.startswith('grade_back_to_student_list_'):
+            class_num, letter = query.data.split('grade_back_to_student_list_')[-1].split('_')
+        else:
+            raise ValueError("Invalid callback data")
+            
+    except Exception:
+        await query.edit_message_text(get_tchr_msg('error_generic', lang))
+        return TEACHER_MAIN
     
     students_list = _get_students_by_class(class_num, letter)
     
@@ -355,18 +550,21 @@ async def select_grades_student(update: Update, context: ContextTypes.DEFAULT_TY
     all_students = db.get_all_students()
     student_data = all_students.get(student_id)
     if not student_data:
-        await query.edit_message_text("Ошибка: Ученик не найден.")
+        await query.edit_message_text(get_tchr_msg('error_student_not_found', lang)) 
         return TEACHER_MAIN
         
     name = f"{student_data.get('first_name', '')} {student_data.get('last_name', '')}"
     teacher_subject = user_info.get('subject', 'N/A')
+    
+    class_num = student_data.get('class')
+    letter = student_data.get('letter')
     
     context.user_data['selected_student_id'] = student_id
     context.user_data['selected_student_name'] = name
     
     await query.edit_message_text(
         get_tchr_msg('grades_marking', lang).format(name=name, subject=teacher_subject),
-        reply_markup=kb.get_grades_markup(lang),
+        reply_markup=kb.get_grades_markup(lang, class_num, letter),
         parse_mode='HTML'
     )
     return TEACHER_GRADES_MARK_STUDENT
@@ -383,10 +581,10 @@ async def set_grade(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
     teacher_subject = user_info.get('subject')
     
     if not student_id or not teacher_subject:
-        await query.edit_message_text("Ошибка: ID ученика или предмет учителя не найден. Попробуйте снова.")
+        await query.edit_message_text(get_tchr_msg('error_teacher_subject_not_found', lang))
         return TEACHER_MAIN
         
-    today_str = datetime.date.today().isoformat()
+    today_str = datetime.datetime.now(pytz.timezone("Asia/Tashkent")).date().isoformat()
     
     app_data = db.get_app_data()
     if 'grades' not in app_data:
@@ -455,7 +653,7 @@ async def receive_new_login(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     new_login = update.message.text
     
     if len(new_login.split()) > 1:
-        await update.message.reply_text("Логин не должен содержать пробелов. Попробуйте еще раз.")
+        await update.message.reply_text(get_tchr_msg('settings_error_login_spaces', lang))
         return TEACHER_SETTINGS_CHANGE_LOGIN
 
     context.user_data['new_login'] = new_login.lower()
@@ -471,7 +669,7 @@ async def receive_new_password(update: Update, context: ContextTypes.DEFAULT_TYP
     new_login = context.user_data.pop('new_login', None)
     
     if not new_login:
-        await update.message.reply_text("Произошла ошибка, попробуйте снова.")
+        await update.message.reply_text(get_tchr_msg('error_generic', lang))
         return await back_to_main(update, context)
 
     user_info['username'] = new_login

@@ -1,12 +1,36 @@
-import json, os
+import json
+import os
+import threading
+
+CYRILLIC_TO_LATIN_MAP = { 'A': 'А' }
+
+def normalize_text(text: str) -> str:
+    if not text:
+        return text
+    
+    translation_table = str.maketrans(CYRILLIC_TO_LATIN_MAP)
+    return text.translate(translation_table).upper()
+
+def normalize_class_key(class_key: str) -> str:
+    if not class_key:
+        return ""
+    
+    digits = "".join(filter(str.isdigit, class_key))
+    letters = "".join(filter(str.isalpha, class_key))
+    
+    return f"{digits}{normalize_text(letters)}"
+
 
 USERS_FILE = 'users.json'
 TEACHERS_FILE = 'teachers.json'
 ADMINS_FILE = 'admins.json'
 SCHEDULE_FILE = 'schedule.json'
 DATA_FILE = 'data.json'
+TIMETABLE_FILE = 'timetable.json'
 
-ALL_DB_FILES = [USERS_FILE, TEACHERS_FILE, ADMINS_FILE, SCHEDULE_FILE, DATA_FILE]
+ALL_DB_FILES = [USERS_FILE, TEACHERS_FILE, ADMINS_FILE, SCHEDULE_FILE, DATA_FILE, TIMETABLE_FILE]
+
+db_lock = threading.Lock()
 
 def init_database():
     for file_path in ALL_DB_FILES:
@@ -16,16 +40,29 @@ def init_database():
             safe_load(file_path, default_data={})
 
 def safe_load(file_path, default_data={}):
-    with open(file_path, 'r', encoding='utf-8') as f:
-        content = f.read()
-        if not content:
-            safe_save(file_path, default_data)
-            return default_data
-        return json.loads(content)
+    # ИЗМЕНИТЬ: Блокируем доступ на время чтения
+    with db_lock:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+            if not content:
+                # Вызов save_all... из load... может вызвать взаимную блокировку
+                # Этот блок выполняется только один раз при инициализации,
+                # поэтому мы можем временно разблокировать его
+                # (Примечание: лучшая практика - вынести save из load, но
+                # в данном контексте это безопасно, т.к. content пуст)
+                pass 
+            else:
+                return json.loads(content)
+
+    if not content:
+        safe_save(file_path, default_data)
+        return default_data
+
 
 def safe_save(file_path, data):
-    with open(file_path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
+    with db_lock:
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
 
 def get_all_students(): 
     return safe_load(USERS_FILE)
@@ -87,6 +124,12 @@ def find_user_by_username(username, role):
             return tg_id, user_data
     return None, None
 
+def get_timetable():
+    return safe_load(TIMETABLE_FILE)
+
+def save_timetable(data):
+    safe_save(TIMETABLE_FILE, data)
+
 if __name__ == "__main__":
     init_database()
     admins = get_all_admins()
@@ -101,4 +144,3 @@ if __name__ == "__main__":
             }
         }
         save_all_admins(test_admin)
-

@@ -1,4 +1,6 @@
 import logging
+import datetime
+import pytz
 from telegram import Update
 from telegram.ext import (
     ContextTypes,
@@ -40,6 +42,7 @@ MESSAGES = {
         'back_to_main': "Главное меню",
         'schedule_tomorrow_title': "Расписание на завтра ({day_name}):",
         'schedule_full_title': "Полное расписание для {class_letter} класса:",
+        'settings_error_login_spaces': "❌ Логин не должен содержать пробелов. Попробуйте еще раз.",
         'day_monday': "Понедельник",
         'day_tuesday': "Вторник",
         'day_wednesday': "Среда",
@@ -71,6 +74,7 @@ MESSAGES = {
         'day_friday': "Friday",
         'day_saturday': "Saturday",
         'day_sunday': "Sunday",
+        'settings_error_login_spaces': "❌ Username must not contain spaces. Try again.",
     },
     'uz': {
         'schedule_menu': "Qaysi dars jadvalini ko'rmoqchisiz:",
@@ -95,6 +99,7 @@ MESSAGES = {
         'day_friday': "Juma",
         'day_saturday': "Shanba",
         'day_sunday': "Yakshanba",
+        'settings_error_login_spaces': "❌ Login bo'sh joylarni o'z ichiga olmasligi kerak. Qayta urinib ko'ring.",
     }
 }
 
@@ -183,7 +188,7 @@ async def show_schedule_tomorrow(update: Update, context: ContextTypes.DEFAULT_T
         return STUDENT_SCHEDULE
         
     class_key = f"{user_class}{user_letter}"
-    
+    class_key = db.normalize_class_key(f"{user_class}{user_letter}")
     schedule_db = db.get_schedule()
     class_schedule = schedule_db.get(class_key)
     
@@ -191,8 +196,13 @@ async def show_schedule_tomorrow(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text(get_std_msg('schedule_not_found', lang).format(class_letter=class_key))
         return STUDENT_SCHEDULE
         
-    import datetime
-    tomorrow = datetime.date.today() + datetime.timedelta(days=1)
+    try:
+        tashkent_time = datetime.datetime.now(pytz.timezone("Asia/Tashkent"))
+    except pytz.exceptions.UnknownTimeZoneError:
+        logger.warning("Часовой пояс Asia/Tashkent не найден, используется UTC.")
+        tashkent_time = datetime.datetime.now(pytz.timezone("UTC"))
+
+    tomorrow = tashkent_time.date() + datetime.timedelta(days=1)
     day_of_week_index = tomorrow.weekday()
     
     day_keys = ['day_monday', 'day_tuesday', 'day_wednesday', 'day_thursday', 'day_friday', 'day_saturday', 'day_sunday']
@@ -217,7 +227,7 @@ async def show_schedule_full(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user_class = user_info.get('class')
     user_letter = user_info.get('letter')
     class_key = f"{user_class}{user_letter}"
-    
+    class_key = db.normalize_class_key(f"{user_class}{user_letter}")
     schedule_db = db.get_schedule()
     class_schedule = schedule_db.get(class_key)
     
@@ -327,7 +337,7 @@ async def receive_new_login(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     new_login = update.message.text
     
     if len(new_login.split()) > 1:
-        await update.message.reply_text("Логин не должен содержать пробелов. Попробуйте еще раз.")
+        await update.message.reply_text(get_std_msg('settings_error_login_spaces', lang))
         return STUDENT_SETTINGS_CHANGE_LOGIN
 
     context.user_data['new_login'] = new_login.lower()

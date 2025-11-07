@@ -18,7 +18,7 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-( 
+(
 SELECT_LANG, 
 SELECT_ROLE, 
 LOGIN, MAIN_MENU, 
@@ -35,16 +35,12 @@ STUDENT_SETTINGS_CHANGE_PASS,
 TEACHER_SCHEDULE, 
 TEACHER_ATTENDANCE_SELECT_CLASS, 
 TEACHER_ATTENDANCE_SELECT_LETTER,
-TEACHER_ATTENDANCE_SELECT_STUDENT,
+TEACHER_ATTENDANCE_SELECT_STUDENT, 
 TEACHER_ATTENDANCE_MARK_STUDENT, 
-TEACHER_GRADES_SELECT_CLASS,
-TEACHER_GRADES_SELECT_LETTER,
-TEACHER_GRADES_SELECT_STUDENT, 
-TEACHER_GRADES_MARK_STUDENT, 
 TEACHER_SETTINGS,
 TEACHER_SETTINGS_CHANGE_LOGIN, 
 TEACHER_SETTINGS_CHANGE_PASS,
-
+    
 ADMIN_REGISTER_STEP_1_NAME, 
 ADMIN_REGISTER_STEP_2_LASTNAME, 
 ADMIN_REGISTER_STEP_3_CLASS,
@@ -52,7 +48,7 @@ ADMIN_REGISTER_STEP_4_LETTER,
 ADMIN_REGISTER_STEP_5_LOGIN, 
 ADMIN_REGISTER_STEP_6_PASS,
 ADMIN_EDIT_SCHEDULE
-) = map(str, range(30))
+) = map(str, range(27))
 
 import student
 import teacher
@@ -318,7 +314,8 @@ async def route_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
 def main() -> None:
     db.init_database()
-    
+    from dotenv import load_dotenv
+    load_dotenv()
     TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     application = ApplicationBuilder().token(TOKEN).build()
 
@@ -363,11 +360,6 @@ def main() -> None:
         kb.get_text('main_attendance', 'ru'),
         kb.get_text('main_attendance', 'en'),
         kb.get_text('main_attendance', 'uz')
-    ])
-    teacher_grades_filter = filters.Text([
-        kb.get_text('main_grades', 'ru'),
-        kb.get_text('main_grades', 'en'),
-        kb.get_text('main_grades', 'uz')
     ])
     teacher_settings_filter = filters.Text([
         kb.get_text('main_settings', 'ru'),
@@ -418,7 +410,6 @@ def main() -> None:
             TEACHER_MAIN: [
                 MessageHandler(teacher_schedule_filter, teacher.handle_schedule),
                 MessageHandler(teacher_attendance_filter, teacher.handle_attendance),
-                MessageHandler(teacher_grades_filter, teacher.handle_grades),
                 MessageHandler(teacher_settings_filter, teacher.handle_settings),
                 CallbackQueryHandler(teacher.back_to_main_callback, pattern='^back_to_main_menu$'),
             ],
@@ -453,27 +444,25 @@ def main() -> None:
 
             TEACHER_SCHEDULE: [
                 MessageHandler(teacher_schedule_today_filter | teacher_schedule_tomorrow_filter | teacher_schedule_full_filter, 
-                               teacher.show_schedule_placeholder),
+                                teacher.show_teacher_schedule), 
                 MessageHandler(back_filter, teacher.back_to_main),
             ],
-            TEACHER_ATTENDANCE_MARK_STUDENT: [
-                CallbackQueryHandler(teacher.select_attendance_letter, pattern='^att_letter_'),
-                CallbackQueryHandler(teacher.select_attendance_student, pattern='^att_student_'),
-                CallbackQueryHandler(teacher.mark_attendance, pattern='^att_(present|absent)$'),
-                CallbackQueryHandler(teacher.select_attendance_class, pattern='^att_letter_back_to_class'), 
-            ],
-            TEACHER_GRADES_SELECT_LETTER: [
-                CallbackQueryHandler(teacher.select_grades_class, pattern='^grade_class_'),
+            
+            TEACHER_ATTENDANCE_SELECT_CLASS: [
+                CallbackQueryHandler(teacher.select_attendance_class, pattern='^att_class_'),
                 CallbackQueryHandler(teacher.back_to_main_callback, pattern='^back_to_main_menu$'),
             ],
-            TEACHER_GRADES_SELECT_STUDENT: [
-                CallbackQueryHandler(teacher.select_grades_letter, pattern='^grade_letter_'),
-                CallbackQueryHandler(teacher.select_grades_class, pattern='^grade_letter_back_to_class'), 
+            TEACHER_ATTENDANCE_SELECT_LETTER: [
+                CallbackQueryHandler(teacher.select_attendance_letter, pattern='^att_letter_'),
+                CallbackQueryHandler(teacher.handle_attendance, pattern='^att_letter_back_to_class'), 
             ],
-            TEACHER_GRADES_MARK_STUDENT: [
-                CallbackQueryHandler(teacher.select_grades_student, pattern='^grade_student_'),
-                CallbackQueryHandler(teacher.set_grade, pattern='^grade_(2|3|4|5)$'),
-                CallbackQueryHandler(teacher.select_grades_letter, pattern='^grade_student_back_to_letter_'), 
+            TEACHER_ATTENDANCE_SELECT_STUDENT: [
+                CallbackQueryHandler(teacher.select_attendance_student, pattern='^att_student_'),
+                CallbackQueryHandler(teacher.select_attendance_class, pattern='^att_student_back_to_letter_'),
+            ],
+            TEACHER_ATTENDANCE_MARK_STUDENT: [
+                CallbackQueryHandler(teacher.mark_attendance, pattern='^att_(present|absent)$'),
+                CallbackQueryHandler(teacher.select_attendance_letter, pattern='^att_mark_back_to_student_list_'), # Этот pattern='...' нужно будет исправить в keyboards.py и teacher.py
             ],
             TEACHER_SETTINGS: [
                 CallbackQueryHandler(teacher.toggle_next_lesson, pattern='^settings_toggle_next_lesson$'),
@@ -527,5 +516,5 @@ def main() -> None:
     application.add_handler(conv_handler)
     application.run_polling()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

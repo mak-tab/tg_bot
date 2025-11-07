@@ -110,10 +110,9 @@ def get_student_schedule_keyboard(lang='ru'):
 
 def get_teacher_main_keyboard(lang='ru'):
     keyboard = [
-        [KeyboardButton(get_text('main_schedule', lang)),
-         KeyboardButton(get_text('main_attendance', lang))],
-        [KeyboardButton(get_text('main_grades', lang)),
-         KeyboardButton(get_text('main_settings', lang))],
+        [KeyboardButton(get_text('main_schedule', lang))],
+        [KeyboardButton(get_text('main_attendance', lang))],
+        [KeyboardButton(get_text('main_settings', lang))],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -126,16 +125,19 @@ def get_teacher_schedule_keyboard(lang='ru'):
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-def get_attendance_markup(lang='ru'):
+def get_attendance_markup(lang='ru', class_num=None, letter=None):
+    back_callback = f'att_mark_back_to_student_list_{class_num}_{letter}'
     keyboard = [
         [
             InlineKeyboardButton(get_text('attendance_present', lang), callback_data='att_present'),
             InlineKeyboardButton(get_text('attendance_absent', lang), callback_data='att_absent')
-        ]
+        ],
+        [InlineKeyboardButton(get_text('back', lang), callback_data=back_callback)]
     ]
     return InlineKeyboardMarkup(keyboard)
 
-def get_grades_markup(lang='ru'):
+def get_grades_markup(lang='ru', class_num=None, letter=None):
+    back_callback = f'grade_back_to_student_list_{class_num}_{letter}'
     keyboard = [
         [
             InlineKeyboardButton("2", callback_data='grade_2'),
@@ -143,7 +145,7 @@ def get_grades_markup(lang='ru'):
             InlineKeyboardButton("4", callback_data='grade_4'),
             InlineKeyboardButton("5", callback_data='grade_5'),
         ],
-        [InlineKeyboardButton(get_text('back', lang), callback_data='grade_back_to_student_list')] # Пример
+        [InlineKeyboardButton(get_text('back', lang), callback_data=back_callback)]
     ]
     return InlineKeyboardMarkup(keyboard)
 
