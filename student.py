@@ -7,26 +7,16 @@ from telegram.ext import (
     CallbackQueryHandler,
     filters,
 )
-
-# --- Импорты из наших модулей ---
 import database as db
 import keyboards as kb
 
-# --- Настройка логирования ---
 logger = logging.getLogger(__name__)
 
-from bot import (
-    STUDENT_MAIN, 
-    TEACHER_MAIN, 
-    ADMIN_MAIN,
-    STUDENT_SCHEDULE,
-    STUDENT_GRADES,
-    STUDENT_SETTINGS,
-    STUDENT_SETTINGS_CHANGE_LOGIN,
-    STUDENT_SETTINGS_CHANGE_PASS
+from bot import ( STUDENT_MAIN, TEACHER_MAIN, ADMIN_MAIN, 
+                STUDENT_SCHEDULE, STUDENT_GRADES, STUDENT_SETTINGS, 
+                STUDENT_SETTINGS_CHANGE_LOGIN, STUDENT_SETTINGS_CHANGE_PASS
 )
 
-# --- Локализация ---
 MESSAGES = {
     'ru': {
         'schedule_menu': "Выберите, какое расписание вы хотите посмотреть:",
@@ -105,17 +95,13 @@ MESSAGES = {
 def get_std_msg(key, lang='ru'):
     return MESSAGES.get(lang, MESSAGES['ru']).get(key, f"_{key}_")
 
-# --- Вспомогательные функции ---
-
 def get_user_data(context: ContextTypes.DEFAULT_TYPE):
-    """Возвращает (lang, user_info, db_id) из context."""
     lang = context.user_data.get('lang', 'ru')
     user_info = context.user_data.get('user_info', {})
     db_id = context.user_data.get('db_id')
     return lang, user_info, db_id
 
 async def back_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Возвращает пользователя в главное меню ученика."""
     lang, _, _ = get_user_data(context)
     await update.message.reply_text(
         get_std_msg('back_to_main', lang),
@@ -124,25 +110,18 @@ async def back_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE) -> st
     return STUDENT_MAIN
 
 async def back_to_main_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Обрабатывает нажатие Inline-кнопки 'Назад' и возвращает в гл. меню."""
     query = update.callback_query
     await query.answer()
     lang, _, _ = get_user_data(context)
     
-    # Отправляем новое сообщение с ReplyKeyboard
     await query.message.reply_text(
         get_std_msg('back_to_main', lang),
         reply_markup=kb.get_student_main_keyboard(lang)
     )
-    # Удаляем старое сообщение с InlineKeyboard
     await query.message.delete()
     return STUDENT_MAIN
 
-
-# --- 1. Обработчики главного меню (STUDENT_MAIN) ---
-
 async def handle_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Переводит в меню 'Расписание'."""
     lang, _, _ = get_user_data(context)
     await update.message.reply_text(
         get_std_msg('schedule_menu', lang),
@@ -151,19 +130,16 @@ async def handle_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     return STUDENT_SCHEDULE
 
 async def handle_grades(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Переводит в меню 'Оценки'."""
     lang, user_info, db_id = get_user_data(context)
     
-    # Оценки хранятся в data.json
     all_data = db.get_app_data()
-    # Структура: data['grades']['student_db_id']['subject'] = {'date': 'grade'}
     user_grades = all_data.get('grades', {}).get(db_id, {})
     
     subjects_list = list(user_grades.keys())
     
     if not subjects_list:
         await update.message.reply_text(get_std_msg('no_grades', lang))
-        return STUDENT_MAIN # Остаемся в главном меню
+        return STUDENT_MAIN
         
     await update.message.reply_text(
         get_std_msg('grades_menu', lang),
@@ -172,7 +148,6 @@ async def handle_grades(update: Update, context: ContextTypes.DEFAULT_TYPE) -> s
     return STUDENT_GRADES
 
 async def handle_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Переводит в меню 'Настройки'."""
     lang, user_info, _ = get_user_data(context)
     await update.message.reply_text(
         get_std_msg('settings_menu', lang),
@@ -180,15 +155,12 @@ async def handle_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
     return STUDENT_SETTINGS
 
-# --- 2. Обработчики меню 'Расписание' (STUDENT_SCHEDULE) ---
 def _format_schedule_for_day(schedule_data, day_name_key, lang):
-    """Вспомогательная функция форматирования расписания."""
     if not schedule_data:
         return "  (Нет уроков)"
     
     day_name = get_std_msg(day_name_key, lang)
     lines = [f"<b>{day_name}</b>:"]
-    # Сортируем уроки по номеру (ключ '1', '2', ...)
     for lesson_num in sorted(schedule_data.keys(), key=lambda x: int(x)):
         lesson_name = schedule_data[lesson_num]
         lines.append(f"  {lesson_num}. {lesson_name}")
@@ -196,10 +168,8 @@ def _format_schedule_for_day(schedule_data, day_name_key, lang):
 
 
 async def show_schedule_tomorrow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Показывает расписание на завтра."""
     lang, user_info, _ = get_user_data(context)
     
-    # Определение класса ученика
     user_class = user_info.get('class')
     user_letter = user_info.get('letter')
     if not user_class or not user_letter:
@@ -208,7 +178,6 @@ async def show_schedule_tomorrow(update: Update, context: ContextTypes.DEFAULT_T
         
     class_key = f"{user_class}{user_letter}"
     
-    # Загрузка расписания
     schedule_db = db.get_schedule()
     class_schedule = schedule_db.get(class_key)
     
@@ -216,11 +185,9 @@ async def show_schedule_tomorrow(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text(get_std_msg('schedule_not_found', lang).format(class_letter=class_key))
         return STUDENT_SCHEDULE
         
-    # Определение завтрашнего дня (TODO: Учесть часовой пояс Asia/Tashkent)
     import datetime
-    # Временное решение:
     tomorrow = datetime.date.today() + datetime.timedelta(days=1)
-    day_of_week_index = tomorrow.weekday() # 0 = Понедельник, 6 = Воскресенье
+    day_of_week_index = tomorrow.weekday()
     
     day_keys = ['day_monday', 'day_tuesday', 'day_wednesday', 'day_thursday', 'day_friday', 'day_saturday', 'day_sunday']
     day_db_keys = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
@@ -230,7 +197,6 @@ async def show_schedule_tomorrow(update: Update, context: ContextTypes.DEFAULT_T
     
     schedule_for_tomorrow = class_schedule.get(tomorrow_key, {})
     
-    # Форматирование
     formatted_schedule = _format_schedule_for_day(schedule_for_tomorrow, tomorrow_name_key, lang)
     
     await update.message.reply_text(
@@ -240,7 +206,6 @@ async def show_schedule_tomorrow(update: Update, context: ContextTypes.DEFAULT_T
     return STUDENT_SCHEDULE
 
 async def show_schedule_full(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Показывает полное расписание."""
     lang, user_info, _ = get_user_data(context)
     
     user_class = user_info.get('class')
@@ -268,11 +233,7 @@ async def show_schedule_full(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text("\n\n".join(full_schedule_lines), parse_mode='HTML')
     return STUDENT_SCHEDULE
 
-
-# --- 3. Обработчики меню 'Оценки' (STUDENT_GRADES) ---
-
 async def show_grades_for_subject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Показывает список оценок по выбранному предмету."""
     query = update.callback_query
     await query.answer()
     
@@ -286,54 +247,43 @@ async def show_grades_for_subject(update: Update, context: ContextTypes.DEFAULT_
         
     all_data = db.get_app_data()
     user_grades = all_data.get('grades', {}).get(db_id, {})
-    subject_grades = user_grades.get(subject, {}) # {'date': 'grade'}
+    subject_grades = user_grades.get(subject, {})
     
     if not subject_grades:
         await query.edit_message_text(get_std_msg('no_grades', lang))
         return STUDENT_GRADES
         
-    # Форматирование
     lines = [get_std_msg('grades_title', lang).format(subject=subject)]
-    # Сортируем по дате (предполагая формат 'YYYY-MM-DD' или 'DD.MM.YYYY')
-    # Простая сортировка
     try:
         sorted_dates = sorted(subject_grades.keys())
     except Exception:
-        sorted_dates = subject_grades.keys() # Без сортировки, если даты смешанные
+        sorted_dates = subject_grades.keys()
 
     for date in sorted_dates:
         grade = subject_grades[date]
         lines.append(get_std_msg('grades_line', lang).format(date=date, grade=grade))
     
-    # Обновляем сообщение, добавляя кнопку "Назад к списку"
     subjects_list = list(user_grades.keys())
     await query.edit_message_text(
         "\n".join(lines),
-        reply_markup=kb.generate_subjects_keyboard(subjects_list, lang), # Снова показываем список предметов
+        reply_markup=kb.generate_subjects_keyboard(subjects_list, lang),
         parse_mode='HTML'
     )
     
     return STUDENT_GRADES
 
-
-# --- 4. Обработчики меню 'Настройки' (STUDENT_SETTINGS) ---
-
 async def _toggle_setting(update: Update, context: ContextTypes.DEFAULT_TYPE, setting_key: str) -> str:
-    """Вспомогательная функция для переключения настроек (True/False)."""
     query = update.callback_query
     await query.answer()
     
     lang, user_info, db_id = get_user_data(context)
     
-    # 1. Инвертируем значение
     current_value = user_info.get(setting_key, False)
     new_value = not current_value
     user_info[setting_key] = new_value
     
-    # 2. Обновляем context
     context.user_data['user_info'] = user_info
     
-    # 3. Сохраняем в БД (users.json)
     all_students = db.get_all_students()
     if db_id in all_students:
         all_students[db_id][setting_key] = new_value
@@ -341,7 +291,6 @@ async def _toggle_setting(update: Update, context: ContextTypes.DEFAULT_TYPE, se
     else:
         logger.error(f"Не удалось сохранить настройку {setting_key} для {db_id}. Пользователь не найден.")
         
-    # 4. Обновляем клавиатуру
     await query.edit_message_reply_markup(
         reply_markup=kb.generate_settings_keyboard(user_info, lang)
     )
@@ -349,20 +298,16 @@ async def _toggle_setting(update: Update, context: ContextTypes.DEFAULT_TYPE, se
     return STUDENT_SETTINGS
 
 async def toggle_next_lesson(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Переключает 'warning_about_next_lesson'."""
     return await _toggle_setting(update, context, 'warning_about_next_lesson')
 
 async def toggle_daily_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Переключает 'warning_everyday_about_lessons'."""
     return await _toggle_setting(update, context, 'warning_everyday_about_lessons')
 
 async def start_change_login(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Начинает процесс смены логина/пароля."""
     query = update.callback_query
     await query.answer()
     lang, _, _ = get_user_data(context)
     
-    # Удаляем Inline-клавиатуру
     await query.delete_message()
     
     await query.message.reply_text(
@@ -371,10 +316,7 @@ async def start_change_login(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
     return STUDENT_SETTINGS_CHANGE_LOGIN
 
-# --- 5. Смена логина/пароля ---
-
 async def receive_new_login(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Получает новый логин, запрашивает пароль."""
     lang, _, _ = get_user_data(context)
     new_login = update.message.text
     
@@ -391,7 +333,6 @@ async def receive_new_login(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     return STUDENT_SETTINGS_CHANGE_PASS
     
 async def receive_new_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Получает новый пароль, сохраняет и возвращает в гл. меню."""
     lang, user_info, db_id = get_user_data(context)
     
     new_pass = update.message.text
@@ -402,12 +343,10 @@ async def receive_new_password(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("Произошла ошибка, попробуйте снова.")
         return await back_to_main(update, context)
 
-    # 1. Обновляем user_info
     user_info['username'] = new_login
     user_info['password'] = new_pass
     context.user_data['user_info'] = user_info
     
-    # 2. Сохраняем в БД
     all_students = db.get_all_students()
     if db_id in all_students:
         all_students[db_id]['username'] = new_login
@@ -421,9 +360,9 @@ async def receive_new_password(update: Update, context: ContextTypes.DEFAULT_TYP
     return await back_to_main(update, context)
 
 async def cancel_change_login(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Отменяет смену логина/пароля."""
     lang, _, _ = get_user_data(context)
     context.user_data.pop('new_login', None)
     
     await update.message.reply_text(get_std_msg('settings_change_cancelled', lang))
     return await back_to_main(update, context)
+

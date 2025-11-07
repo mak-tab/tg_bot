@@ -8,32 +8,18 @@ from telegram.ext import (
     CallbackQueryHandler,
     filters,
 )
-
-# --- Импорты из наших модулей ---
 import database as db
 import keyboards as kb
-
-from bot import (
-    STUDENT_MAIN, 
-    TEACHER_MAIN, 
-    ADMIN_MAIN,
-    TEACHER_SCHEDULE,
-    TEACHER_ATTENDANCE_SELECT_CLASS,
-    TEACHER_ATTENDANCE_SELECT_LETTER,
-    TEACHER_ATTENDANCE_MARK_STUDENT,
-    TEACHER_GRADES_SELECT_CLASS,
-    TEACHER_GRADES_SELECT_LETTER,
-    TEACHER_GRADES_SELECT_STUDENT,
-    TEACHER_GRADES_MARK_STUDENT,
-    TEACHER_SETTINGS,
-    TEACHER_SETTINGS_CHANGE_LOGIN,
-    TEACHER_SETTINGS_CHANGE_PASS
+from bot import ( STUDENT_MAIN, TEACHER_MAIN, ADMIN_MAIN,
+                TEACHER_SCHEDULE, TEACHER_ATTENDANCE_SELECT_CLASS,
+                TEACHER_ATTENDANCE_SELECT_LETTER, TEACHER_ATTENDANCE_MARK_STUDENT,
+                TEACHER_GRADES_SELECT_CLASS, TEACHER_GRADES_SELECT_LETTER,
+                TEACHER_GRADES_SELECT_STUDENT, TEACHER_GRADES_MARK_STUDENT,
+                TEACHER_SETTINGS, TEACHER_SETTINGS_CHANGE_LOGIN,
+                TEACHER_SETTINGS_CHANGE_PASS
 )
-
-# --- Настройка логирования ---
 logger = logging.getLogger(__name__)
 
-# --- Локализация ---
 MESSAGES = {
     'ru': {
         'back_to_main': "Главное меню",
@@ -100,17 +86,13 @@ MESSAGES = {
 def get_tchr_msg(key, lang='ru'):
     return MESSAGES.get(lang, MESSAGES['ru']).get(key, f"_{key}_")
 
-# --- Вспомогательные функции ---
-
 def get_user_data(context: ContextTypes.DEFAULT_TYPE):
-    """Возвращает (lang, user_info, db_id) из context."""
     lang = context.user_data.get('lang', 'ru')
     user_info = context.user_data.get('user_info', {})
     db_id = context.user_data.get('db_id')
     return lang, user_info, db_id
 
 async def back_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Возвращает пользователя в главное меню учителя."""
     lang, _, _ = get_user_data(context)
     await update.message.reply_text(
         get_tchr_msg('back_to_main', lang),
@@ -119,7 +101,6 @@ async def back_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE) -> st
     return TEACHER_MAIN
 
 async def back_to_main_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Обрабатывает нажатие Inline-кнопки 'Назад' и возвращает в гл. меню."""
     query = update.callback_query
     await query.answer()
     lang, _, _ = get_user_data(context)
@@ -132,10 +113,6 @@ async def back_to_main_callback(update: Update, context: ContextTypes.DEFAULT_TY
     return TEACHER_MAIN
 
 def _get_all_classes_and_letters():
-    """
-    Собирает словарь всех классов и букв из базы учеников.
-    Возвращает: {'9': ['А', 'Б'], '10': ['А']}
-    """
     students = db.get_all_students()
     classes = {}
     for student_data in students.values():
@@ -146,33 +123,23 @@ def _get_all_classes_and_letters():
                 classes[class_num] = set()
             classes[class_num].add(letter)
     
-    # Конвертируем в отсортированные списки
     sorted_classes = {k: sorted(list(v)) for k, v in classes.items()}
-    # Сортируем сами классы (9, 10, 11)
     sorted_keys = sorted(sorted_classes.keys(), key=lambda x: int(x))
     return {k: sorted_classes[k] for k in sorted_keys}
 
 def _get_students_by_class(class_num, letter):
-    """
-    Получает список учеников (id, first_name, last_name) 
-    по номеру класса и букве.
-    """
     students = db.get_all_students()
     matches = []
     for student_id, student_data in students.items():
         if student_data.get('class') == class_num and student_data.get('letter') == letter:
             matches.append({
-                'id': student_id, # Это db_id ученика
+                'id': student_id,
                 'first_name': student_data.get('first_name', ''),
                 'last_name': student_data.get('last_name', '')
             })
-    # Сортируем по Фамилии, затем по Имени
     return sorted(matches, key=lambda x: (x.get('last_name', ''), x.get('first_name', '')))
 
-# --- 1. Обработчики главного меню (TEACHER_MAIN) ---
-
 async def handle_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Переводит в меню 'Расписание'."""
     lang, _, _ = get_user_data(context)
     await update.message.reply_text(
         get_tchr_msg('schedule_menu', lang),
@@ -181,7 +148,6 @@ async def handle_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     return TEACHER_SCHEDULE
 
 async def handle_attendance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Начинает процесс 'Посещаемость' - выбор класса."""
     lang, _, _ = get_user_data(context)
     classes_dict = _get_all_classes_and_letters()
     
@@ -200,7 +166,6 @@ async def handle_attendance(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     return TEACHER_ATTENDANCE_SELECT_LETTER
 
 async def handle_grades(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Начинает процесс 'Оценки' - выбор класса."""
     lang, _, _ = get_user_data(context)
     classes_dict = _get_all_classes_and_letters()
     
@@ -219,7 +184,6 @@ async def handle_grades(update: Update, context: ContextTypes.DEFAULT_TYPE) -> s
     return TEACHER_GRADES_SELECT_LETTER
 
 async def handle_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Переводит в меню 'Настройки'."""
     lang, user_info, _ = get_user_data(context)
     await update.message.reply_text(
         get_tchr_msg('settings_menu', lang),
@@ -227,19 +191,12 @@ async def handle_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
     return TEACHER_SETTINGS
 
-# --- 2. Обработчики 'Расписание' (TEACHER_SCHEDULE) ---
-# (Заглушка, т.к. нет данных для персонального расписания)
-
 async def show_schedule_placeholder(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Заглушка для кнопок 'Сегодня', 'Завтра', 'Полностью'."""
     lang, _, _ = get_user_data(context)
     await update.message.reply_text(get_tchr_msg('feature_in_development', lang))
     return TEACHER_SCHEDULE
 
-# --- 3. Обработчики 'Посещаемость' (CallbackQuery) ---
-
 async def select_attendance_class(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Выбрали класс. Показываем буквы."""
     query = update.callback_query
     await query.answer()
     lang, _, _ = get_user_data(context)
@@ -260,12 +217,10 @@ async def select_attendance_class(update: Update, context: ContextTypes.DEFAULT_
     return TEACHER_ATTENDANCE_SELECT_LETTER
 
 async def select_attendance_letter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Выбрали букву. Показываем учеников."""
     query = update.callback_query
     await query.answer()
     lang, _, _ = get_user_data(context)
     
-    # 'att_letter_10_А'
     class_num, letter = query.data.split('att_letter_')[-1].split('_')
     
     students_list = _get_students_by_class(class_num, letter)
@@ -283,14 +238,12 @@ async def select_attendance_letter(update: Update, context: ContextTypes.DEFAULT
     return TEACHER_ATTENDANCE_MARK_STUDENT
     
 async def select_attendance_student(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Выбрали ученика. Показываем кнопки 'Присутствует/Отсутствует'."""
     query = update.callback_query
     await query.answer()
     lang, _, _ = get_user_data(context)
     
     student_id = query.data.split('att_student_')[-1]
     
-    # Нам нужно имя ученика
     all_students = db.get_all_students()
     student_data = all_students.get(student_id)
     if not student_data:
@@ -299,7 +252,6 @@ async def select_attendance_student(update: Update, context: ContextTypes.DEFAUL
         
     name = f"{student_data.get('first_name', '')} {student_data.get('last_name', '')}"
     
-    # Сохраняем ID ученика во временный context
     context.user_data['selected_student_id'] = student_id
     context.user_data['selected_student_name'] = name
     
@@ -308,16 +260,14 @@ async def select_attendance_student(update: Update, context: ContextTypes.DEFAUL
         reply_markup=kb.get_attendance_markup(lang),
         parse_mode='HTML'
     )
-    # Остаемся в том же состоянии, ждем нажатия 'att_present'/'att_absent'
     return TEACHER_ATTENDANCE_MARK_STUDENT
 
 async def mark_attendance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Сохраняет отметку о посещаемости."""
     query = update.callback_query
     await query.answer()
     lang, _, _ = get_user_data(context)
     
-    status = query.data # 'att_present' или 'att_absent'
+    status = query.data
     student_id = context.user_data.pop('selected_student_id', None)
     student_name = context.user_data.pop('selected_student_name', 'N/A')
     
@@ -328,8 +278,6 @@ async def mark_attendance(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     status_text = 'present' if status == 'att_present' else 'absent'
     status_icon = '✅' if status == 'att_present' else '❌'
     
-    # Сохранение в data.json
-    # Структура: data['attendance']['YYYY-MM-DD']['student_id'] = 'present'/'absent'
     today_str = datetime.date.today().isoformat()
     
     app_data = db.get_app_data()
@@ -341,21 +289,14 @@ async def mark_attendance(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     app_data['attendance'][today_str][student_id] = status_text
     db.save_app_data(app_data)
     
-    # Редактируем сообщение, как просил пользователь
     await query.edit_message_text(
         get_tchr_msg('attendance_marked', lang).format(name=student_name, status_icon=status_icon),
         parse_mode='HTML'
     )
     
-    # TODO: Нужно вернуть пользователя к списку учеников
-    # (Это требует запоминания class_num и letter в context)
-    # Пока вернем в главное меню для простоты
     return await back_to_main_callback(update, context)
 
-# --- 4. Обработчики 'Оценки' (CallbackQuery) ---
-
 async def select_grades_class(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Выбрали класс. Показываем буквы."""
     query = update.callback_query
     await query.answer()
     lang, _, _ = get_user_data(context)
@@ -376,7 +317,6 @@ async def select_grades_class(update: Update, context: ContextTypes.DEFAULT_TYPE
     return TEACHER_GRADES_SELECT_LETTER
 
 async def select_grades_letter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Выбрали букву. Показываем учеников."""
     query = update.callback_query
     await query.answer()
     lang, _, _ = get_user_data(context)
@@ -398,7 +338,6 @@ async def select_grades_letter(update: Update, context: ContextTypes.DEFAULT_TYP
     return TEACHER_GRADES_SELECT_STUDENT
 
 async def select_grades_student(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Выбрали ученика. Показываем кнопки '2, 3, 4, 5'."""
     query = update.callback_query
     await query.answer()
     lang, user_info, _ = get_user_data(context)
@@ -430,7 +369,7 @@ async def set_grade(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
     await query.answer()
     lang, user_info, _ = get_user_data(context)
     
-    grade = query.data.split('grade_')[-1] # '2', '3', '4', '5'
+    grade = query.data.split('grade_')[-1]
     student_id = context.user_data.pop('selected_student_id', None)
     student_name = context.user_data.pop('selected_student_name', 'N/A')
     teacher_subject = user_info.get('subject')
@@ -439,8 +378,6 @@ async def set_grade(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
         await query.edit_message_text("Ошибка: ID ученика или предмет учителя не найден. Попробуйте снова.")
         return TEACHER_MAIN
         
-    # Сохранение в data.json
-    # Структура: data['grades']['student_db_id']['subject']['YYYY-MM-DD'] = 'grade'
     today_str = datetime.date.today().isoformat()
     
     app_data = db.get_app_data()
@@ -451,7 +388,6 @@ async def set_grade(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
     if teacher_subject not in app_data['grades'][student_id]:
         app_data['grades'][student_id][teacher_subject] = {}
         
-    # Записываем оценку (перезаписываем, если в этот день уже была)
     app_data['grades'][student_id][teacher_subject][today_str] = grade
     db.save_app_data(app_data)
     
@@ -465,11 +401,7 @@ async def set_grade(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
         parse_mode='HTML'
     )
     
-    # TODO: Вернуть к списку учеников
     return await back_to_main_callback(update, context)
-
-# --- 5. Обработчики 'Настройки' (TEACHER_SETTINGS) ---
-# (Этот код почти идентичен student.py, но работает с teachers.json)
 
 async def _toggle_setting(update: Update, context: ContextTypes.DEFAULT_TYPE, setting_key: str) -> str:
     query = update.callback_query

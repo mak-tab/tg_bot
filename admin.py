@@ -1,37 +1,19 @@
-import logging
-import uuid
-import json
-import asyncio
+import logging, uuid, json, asyncio
 from telegram import Update, ReplyKeyboardRemove
-from telegram.ext import (
-    ContextTypes,
-    ConversationHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    CommandHandler,
-    filters,
-)
+from telegram.ext import ( ContextTypes, ConversationHandler, MessageHandler,
+                          CallbackQueryHandler, CommandHandler, filters, )
 import google.generativeai as genai
 import database as db
 import keyboards as kb
-
-from bot import (
-    STUDENT_MAIN, 
-    TEACHER_MAIN, 
-    ADMIN_MAIN,
-    ADMIN_REGISTER_STEP_1_NAME,
-    ADMIN_REGISTER_STEP_2_LASTNAME,
-    ADMIN_REGISTER_STEP_3_CLASS,
-    ADMIN_REGISTER_STEP_4_LETTER,
-    ADMIN_REGISTER_STEP_5_LOGIN,
-    ADMIN_REGISTER_STEP_6_PASS,
-    ADMIN_EDIT_SCHEDULE
-)
+from bot import ( STUDENT_MAIN, TEACHER_MAIN, ADMIN_MAIN, 
+    ADMIN_REGISTER_STEP_1_NAME, ADMIN_REGISTER_STEP_2_LASTNAME,
+    ADMIN_REGISTER_STEP_3_CLASS, ADMIN_REGISTER_STEP_4_LETTER,
+    ADMIN_REGISTER_STEP_5_LOGIN, ADMIN_REGISTER_STEP_6_PASS,
+    ADMIN_EDIT_SCHEDULE 
+    )
 
 logger = logging.getLogger(__name__)
-
 GEMINI_API_KEY = "AIzaSyDYKPNqqBirAqSP7B_PWT8J2hJruC8tjq8"
-
 
 MESSAGES = {
     'ru': {
@@ -64,7 +46,6 @@ MESSAGES = {
         'schedule_edit_error_missing_info': "❓ Недостаточно информации. {ai_question}\n\nПожалуйста, уточните ваш запрос.",
         'schedule_edit_cancel': "Редактирование расписания отменено."
     },
-
     'en': {
         'back_to_main': "Main Menu",
         'cancel_register': "❌ Student registration cancelled.",
@@ -95,7 +76,6 @@ MESSAGES = {
         'schedule_edit_error_missing_info': "❓ Not enough information. {ai_question}\n\nPlease clarify your request.",
         'schedule_edit_cancel': "Schedule editing cancelled."
     },
-
     'uz': {
         'back_to_main': "Asosiy menyu",
         'cancel_register': "❌ O‘quvchi ro‘yxatdan o‘tishi bekor qilindi.",
@@ -131,11 +111,9 @@ MESSAGES = {
 def get_adm_msg(key, lang='ru'):
     lang_dict = MESSAGES.get(lang, MESSAGES['ru'])
     msg = lang_dict.get(key)
-    if msg is None:
+    if msg is None: 
         msg = MESSAGES['ru'].get(key, f"_{key}_")
-    
     return msg
-
 
 def get_user_data(context: ContextTypes.DEFAULT_TYPE):
     lang = context.user_data.get('lang', 'ru')
@@ -151,12 +129,9 @@ async def back_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE) -> st
     )
     return ADMIN_MAIN
 
-# 1. Обработчики главного меню (ADMIN_MAIN)
-
 async def handle_register_student(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
     lang, _, _ = get_user_data(context)
     context.user_data['new_student_data'] = {}
-    
     await update.message.reply_text(
         get_adm_msg('register_start', lang),
         reply_markup=ReplyKeyboardRemove(),
@@ -173,24 +148,19 @@ async def handle_edit_schedule(update: Update, context: ContextTypes.DEFAULT_TYP
     )
     return ADMIN_EDIT_SCHEDULE
 
-# 2. Логика Регистрации Ученика (Вложенный ConversationHandler)
-
 async def cancel_register(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
     lang, _, _ = get_user_data(context)
     context.user_data.pop('new_student_data', None)
-
     await update.message.reply_text(
         get_adm_msg('cancel_register', lang),
-        reply_markup=kb.get_admin_main_keyboard(lang) # Возвращаем клаву админа
+        reply_markup=kb.get_admin_main_keyboard(lang)
     )
     return ADMIN_MAIN
 
 async def register_step_1_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    # Получает Имя
     lang, _, _ = get_user_data(context)
     first_name = update.message.text
     context.user_data['new_student_data'] = {'first_name': first_name}
-    
     await update.message.reply_text(
         get_adm_msg('register_step_2', lang).format(first_name=first_name),
         parse_mode='HTML'
@@ -198,11 +168,9 @@ async def register_step_1_name(update: Update, context: ContextTypes.DEFAULT_TYP
     return ADMIN_REGISTER_STEP_2_LASTNAME
 
 async def register_step_2_lastname(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    # Получает Фамилию.
     lang, _, _ = get_user_data(context)
     last_name = update.message.text
     context.user_data['new_student_data']['last_name'] = last_name
-    
     await update.message.reply_text(
         get_adm_msg('register_step_3', lang).format(last_name=last_name),
         parse_mode='HTML'
@@ -210,49 +178,37 @@ async def register_step_2_lastname(update: Update, context: ContextTypes.DEFAULT
     return ADMIN_REGISTER_STEP_3_CLASS
 
 async def register_step_3_class(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    # Получает Класс (цифру)
     lang, _, _ = get_user_data(context)
     class_num = update.message.text
-    
     if not class_num.isdigit():
         await update.message.reply_text("ОШИБКА: Введите только цифру класса (например, 10). Попробуйте еще раз.")
         return ADMIN_REGISTER_STEP_3_CLASS
-        
     context.user_data['new_student_data']['class'] = class_num
-    
     await update.message.reply_text(
         get_adm_msg('register_step_4', lang).format(class_num=class_num),
         parse_mode='HTML'
     )
     return ADMIN_REGISTER_STEP_4_LETTER
-    
+
 async def register_step_4_letter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    # Получает Букву
     lang, _, _ = get_user_data(context)
     letter = update.message.text.upper()
-    
-    if len(letter) > 2 or not letter.isalpha(): # Допускаем 'А' или 'Б'
+    if len(letter) > 2 or not letter.isalpha():
         await update.message.reply_text("Ошибка: Введите только букву класса (например, А). Попробуйте еще раз.")
         return ADMIN_REGISTER_STEP_4_LETTER
-        
     context.user_data['new_student_data']['letter'] = letter
-    
     await update.message.reply_text(
         get_adm_msg('register_step_5', lang).format(letter=letter),
         parse_mode='HTML'
     )
     return ADMIN_REGISTER_STEP_5_LOGIN
-    
+
 async def register_step_5_login(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    # Получает Логин, проверяет на уникальность
     lang, _, _ = get_user_data(context)
     username = update.message.text.lower()
-    
     if len(username.split()) > 1:
         await update.message.reply_text("Логин не должен содержать пробелов. Попробуйте еще раз.")
         return ADMIN_REGISTER_STEP_5_LOGIN
-        
-    # Проверка на уникальность
     db_id, user = db.find_user_by_username(username, 'student')
     if user:
         await update.message.reply_text(
@@ -260,36 +216,25 @@ async def register_step_5_login(update: Update, context: ContextTypes.DEFAULT_TY
             parse_mode='HTML'
         )
         return ADMIN_REGISTER_STEP_5_LOGIN
-        
     context.user_data['new_student_data']['username'] = username
-    
     await update.message.reply_text(
         get_adm_msg('register_step_6', lang).format(username=username),
         parse_mode='HTML'
     )
     return ADMIN_REGISTER_STEP_6_PASS
-    
+
 async def register_step_6_pass(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    # Получает Пароль, Сохраняет ученика
     lang, _, _ = get_user_data(context)
     password = update.message.text
-    
     student_data = context.user_data.pop('new_student_data', {})
     student_data['password'] = password
-    
-    # Добавляем поля по умолчанию
-    student_data['lang'] = 'ru' # Язык по умолчанию при регистрации
+    student_data['lang'] = 'ru'
     student_data['warning_about_next_lesson'] = True
     student_data['warning_everyday_about_lessons'] = False
-    
-    # Генерируем уникальный ID (т.к. у него еще нет telegram_id)
-    # Использовать UUID + имя/класс, чтобы было проще найти
     new_db_id = f"new_{student_data['class']}{student_data['letter']}_{uuid.uuid4()}"
-    
     all_students = db.get_all_students()
     all_students[new_db_id] = student_data
     db.save_all_students(all_students)
-    
     await update.message.reply_text(
         get_adm_msg('register_success', lang).format(
             first_name=student_data['first_name'],
@@ -302,17 +247,9 @@ async def register_step_6_pass(update: Update, context: ContextTypes.DEFAULT_TYP
         parse_mode='HTML',
         reply_markup=kb.get_admin_main_keyboard(lang)
     )
-    
     return ADMIN_MAIN
 
-# 3. Логика Редактирования Расписания (Gemini AI)
-
 async def call_gemini_for_schedule(raw_text: str, current_schedule: dict) -> tuple[dict | None, str | None]:
-    if GEMINI_API_KEY == "YOUR_GEMINI_API_KEY_HERE":
-        logger.error("GEMINI_API_KEY не установлен.")
-        return None, "API-ключ Gemini не настроен."
-
-    # Промпт для Gemini
     system_prompt = f"""
 Ты - ассистент директора школы, отвечающий за расписание.
 Твоя задача - принять текст от администратора и ПРЕОБРАЗОВАТЬ его в СТРОГИЙ JSON формат.
@@ -345,96 +282,45 @@ async def call_gemini_for_schedule(raw_text: str, current_schedule: dict) -> tup
     "10А": {{ "tuesday": {{}} }}
 8.  ОБНОВЛЯЙ текущее расписание, а не заменяй его полностью, если запрос частичный.
 """
-
-    # --- Модель ---
-    try:
-        model = genai.GenerativeModel(
-            model_name="gemini-2.0-flash",
-            system_instruction=system_prompt,
-            generation_config=genai.GenerationConfig(
-                response_mime_type="application/json"
-            )
+    model = genai.GenerativeModel(
+        model_name="gemini-2.0-flash",
+        system_instruction=system_prompt,
+        generation_config=genai.GenerationConfig(
+            response_mime_type="application/json"
         )
-        response = await model.generate_content_async(raw_text)
-        response_json = json.loads(response.text)
-        
-        if "error" in response_json and response_json["error"] == "missing_info":
-            return None, response_json.get("question", "Нужны уточнения.")
-            
-        # Успешный JSON
-        return response_json, None
-
-    except Exception as e:
-        logger.error(f"Ошибка вызова Gemini: {e}")
-        return None, str(e)
-        
-    # await asyncio.sleep(2) # Имитация работы
-    # logger.warning("Используется ЗАГЛУШКА для Gemini API")
-    # if "10А" in raw_text and "понедельник" in raw_text.lower():
-    #     # Имитация успешного ответа
-    #     return {
-    #         "10А": {
-    #             "monday": {
-    #                 "1": "Математика (из AI)",
-    #                 "2": "Физика (из AI)"
-    #             }
-    #         }
-    #     }, None
-    # elif "10Б" in raw_text:
-    #     # Имитация запроса доп. информации
-    #     return None, "Для какого дня недели расписание 10Б?"
-    # else:
-    #     # Имитация ошибки
-    #     return None, "Не удалось распознать формат."
-
+    )
+    response = await model.generate_content_async(raw_text)
+    response_json = json.loads(response.text)
+    if "error" in response_json and response_json["error"] == "missing_info":
+        return None, response_json.get("question", "Нужны уточнения.")
+    return response_json, None
 
 async def receive_schedule_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
     lang, _, _ = get_user_data(context)
     raw_text = update.message.text
-    
     await update.message.reply_text(get_adm_msg('schedule_edit_processing', lang))
-    
     current_schedule = db.get_schedule()
-    
-    # Вызов AI
     new_data, error_or_question = await call_gemini_for_schedule(raw_text, current_schedule)
-    
     if error_or_question:
-        # Ошибка или нужен уточняющий вопрос
         if "API" in error_or_question:
             await update.message.reply_text(get_adm_msg('schedule_edit_error_api', lang))
         else:
             await update.message.reply_text(
                 get_adm_msg('schedule_edit_error_missing_info', lang).format(ai_question=error_or_question)
             )
-        # Остаемся в том же состоянии, ждем нового ввода
         return ADMIN_EDIT_SCHEDULE 
-        
     if new_data:
-        # Успех. new_data - это словарь классов, которые нужно обновить
-        try:
-            for class_key, days_schedule in new_data.items():
-                if class_key not in current_schedule:
-                    current_schedule[class_key] = {}
-                
-                for day_key, lessons in days_schedule.items():
-                    # Обновляем/Заменяем расписание на конкретный день
-                    current_schedule[class_key][day_key] = lessons
-                    
-            db.save_schedule(current_schedule)
-            
-            await update.message.reply_text(get_adm_msg('schedule_edit_success', lang))
-            
-        except Exception as e:
-            logger.error(f"Ошибка сохранения JSON расписания: {e}")
-            await update.message.reply_text(get_adm_msg('schedule_edit_error_json', lang))
-            
+        for class_key, days_schedule in new_data.items():
+            if class_key not in current_schedule:
+                current_schedule[class_key] = {}
+            for day_key, lessons in days_schedule.items():
+                current_schedule[class_key][day_key] = lessons
+        db.save_schedule(current_schedule)
+        await update.message.reply_text(get_adm_msg('schedule_edit_success', lang))
+        await update.message.reply_text(get_adm_msg('schedule_edit_error_json', lang))
     else:
         await update.message.reply_text(get_adm_msg('schedule_edit_error_api', lang))
-
-    # В любом случае (кроме запроса уточнения) возвращаемся в гл. меню
     return await back_to_main(update, context)
-
 
 async def cancel_edit_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
     lang, _, _ = get_user_data(context)
