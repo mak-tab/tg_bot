@@ -1,19 +1,36 @@
-import logging, uuid, json, asyncio
+import logging
+import uuid 
+import json
+import asyncio
 from telegram import Update, ReplyKeyboardRemove
-from telegram.ext import ( ContextTypes, ConversationHandler, MessageHandler,
-                          CallbackQueryHandler, CommandHandler, filters, )
+from telegram.ext import ( 
+    ContextTypes, 
+    ConversationHandler, 
+    MessageHandler,
+    CallbackQueryHandler, 
+    CommandHandler, 
+    filters, 
+)
 import google.generativeai as genai
 import database as db
 import keyboards as kb
-from bot import ( STUDENT_MAIN, TEACHER_MAIN, ADMIN_MAIN, 
-    ADMIN_REGISTER_STEP_1_NAME, ADMIN_REGISTER_STEP_2_LASTNAME,
-    ADMIN_REGISTER_STEP_3_CLASS, ADMIN_REGISTER_STEP_4_LETTER,
-    ADMIN_REGISTER_STEP_5_LOGIN, ADMIN_REGISTER_STEP_6_PASS,
+from bot import ( 
+    STUDENT_MAIN, 
+    TEACHER_MAIN, 
+    ADMIN_MAIN, 
+    ADMIN_REGISTER_STEP_1_NAME, 
+    ADMIN_REGISTER_STEP_2_LASTNAME,
+    ADMIN_REGISTER_STEP_3_CLASS, 
+    ADMIN_REGISTER_STEP_4_LETTER,
+    ADMIN_REGISTER_STEP_5_LOGIN, 
+    ADMIN_REGISTER_STEP_6_PASS,
     ADMIN_EDIT_SCHEDULE 
-    )
+)
 
 logger = logging.getLogger(__name__)
-GEMINI_API_KEY = "AIzaSyDYKPNqqBirAqSP7B_PWT8J2hJruC8tjq8"
+
+import os
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 MESSAGES = {
     'ru': {

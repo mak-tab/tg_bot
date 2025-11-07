@@ -1,6 +1,9 @@
-from telegram import (InlineKeyboardMarkup, InlineKeyboardButton, 
-                    ReplyKeyboardMarkup, KeyboardButton
-                    )
+from telegram import (
+    InlineKeyboardMarkup, 
+    InlineKeyboardButton, 
+    ReplyKeyboardMarkup, 
+    KeyboardButton
+)
 translations = {
     'ru': {
         'role_student': "Ученик(ца) 🧑‍🎓",

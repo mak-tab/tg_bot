@@ -1,8 +1,16 @@
-import logging, os
+import logging
+import os
 from telegram import Update, ReplyKeyboardRemove
-from telegram.ext import ( Application, ApplicationBuilder, CommandHandler, ContextTypes,
-                        ConversationHandler, CallbackQueryHandler, MessageHandler, filters,
-                    )
+from telegram.ext import ( 
+    Application, 
+    ApplicationBuilder, 
+    CommandHandler, 
+    ContextTypes,
+    ConversationHandler, 
+    CallbackQueryHandler, 
+    MessageHandler, 
+    filters,
+)
 import database as db
 import keyboards as kb
 logging.basicConfig(
@@ -11,22 +19,44 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 ( 
-SELECT_LANG, SELECT_ROLE, LOGIN, MAIN_MENU, STUDENT_MAIN, TEACHER_MAIN, ADMIN_MAIN,
+SELECT_LANG, 
+SELECT_ROLE, 
+LOGIN, MAIN_MENU, 
+STUDENT_MAIN, 
+TEACHER_MAIN, 
+ADMIN_MAIN,
 
-STUDENT_SCHEDULE, STUDENT_GRADES, STUDENT_SETTINGS, 
-STUDENT_SETTINGS_CHANGE_LOGIN, STUDENT_SETTINGS_CHANGE_PASS,
+STUDENT_SCHEDULE, 
+STUDENT_GRADES, 
+STUDENT_SETTINGS, 
+STUDENT_SETTINGS_CHANGE_LOGIN, 
+STUDENT_SETTINGS_CHANGE_PASS,
 
-TEACHER_SCHEDULE, TEACHER_ATTENDANCE_SELECT_CLASS, TEACHER_ATTENDANCE_SELECT_LETTER,
-TEACHER_ATTENDANCE_MARK_STUDENT, TEACHER_GRADES_SELECT_CLASS, TEACHER_GRADES_SELECT_LETTER,
-TEACHER_GRADES_SELECT_STUDENT, TEACHER_GRADES_MARK_STUDENT, TEACHER_SETTINGS,
-TEACHER_SETTINGS_CHANGE_LOGIN, TEACHER_SETTINGS_CHANGE_PASS,
-    
-ADMIN_REGISTER_STEP_1_NAME, ADMIN_REGISTER_STEP_2_LASTNAME, ADMIN_REGISTER_STEP_3_CLASS,
-ADMIN_REGISTER_STEP_4_LETTER, ADMIN_REGISTER_STEP_5_LOGIN, ADMIN_REGISTER_STEP_6_PASS,
+TEACHER_SCHEDULE, 
+TEACHER_ATTENDANCE_SELECT_CLASS, 
+TEACHER_ATTENDANCE_SELECT_LETTER,
+TEACHER_ATTENDANCE_SELECT_STUDENT,
+TEACHER_ATTENDANCE_MARK_STUDENT, 
+TEACHER_GRADES_SELECT_CLASS,
+TEACHER_GRADES_SELECT_LETTER,
+TEACHER_GRADES_SELECT_STUDENT, 
+TEACHER_GRADES_MARK_STUDENT, 
+TEACHER_SETTINGS,
+TEACHER_SETTINGS_CHANGE_LOGIN, 
+TEACHER_SETTINGS_CHANGE_PASS,
+
+ADMIN_REGISTER_STEP_1_NAME, 
+ADMIN_REGISTER_STEP_2_LASTNAME, 
+ADMIN_REGISTER_STEP_3_CLASS,
+ADMIN_REGISTER_STEP_4_LETTER, 
+ADMIN_REGISTER_STEP_5_LOGIN, 
+ADMIN_REGISTER_STEP_6_PASS,
 ADMIN_EDIT_SCHEDULE
 ) = map(str, range(30))
 
-import student, teacher, admin
+import student
+import teacher
+import admin
 
 MESSAGES = {
     'ru': {
@@ -76,7 +106,8 @@ MESSAGES = {
     }
 }
 
-def get_msg(key, lang='ru'): return MESSAGES.get(lang, MESSAGES['ru']).get(key, f"_{key}_")
+def get_msg(key, lang='ru'): 
+    return MESSAGES.get(lang, MESSAGES['ru']).get(key, f"_{key}_")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
     user = update.effective_user
@@ -88,6 +119,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
         context.user_data['user_info'] = user_data
         context.user_data['role'] = role
         context.user_data['lang'] = lang
+        context.user_data['db_id'] = telegram_id
         
         await update.message.reply_text(
             get_msg('hello_user', lang).format(first_name=user_data.get('first_name', '')),
@@ -156,26 +188,47 @@ async def select_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str
 async def try_login(username, password, role, telegram_id, lang):
     username = username.lower()
     
-    db_telegram_id, user_data = db.find_user_by_username(username, role)
+    db_id, user_data = db.find_user_by_username(username, role)
     
     if user_data and user_data.get('password') == password:
         user_data['lang'] = lang
         
-        if role == 'student':
-            all_users = db.get_all_students()
-            all_users[db_telegram_id] = user_data
-            db.save_all_students(all_users)
-        elif role == 'teacher':
-            all_teachers = db.get_all_teachers()
-            all_teachers[db_telegram_id] = user_data
-            db.save_all_teachers(all_teachers)
-        elif role == 'admin':
-            all_admins = db.get_all_admins()
-            all_admins[db_telegram_id] = user_data
-            db.save_all_admins(all_admins)
+        if db_id.startswith("new_"):
+            logger.info(f"Первый вход для {username}. Привязка telegram_id {telegram_id}...")
+            if role == 'student':
+                all_users = db.get_all_students()
+                all_users.pop(db_id)
+                all_users[telegram_id] = user_data
+                db.save_all_students(all_users)
+            elif role == 'teacher':
+                all_teachers = db.get_all_teachers()
+                all_teachers.pop(db_id)
+                all_teachers[telegram_id] = user_data
+                db.save_all_teachers(all_teachers)
+            elif role == 'admin':
+                all_admins = db.get_all_admins()
+                all_admins.pop(db_id)
+                all_admins[telegram_id] = user_data
+                db.save_all_admins(all_admins)
             
-        return user_data, db_telegram_id
+            return user_data, telegram_id
         
+        else:
+            if role == 'student':
+                all_users = db.get_all_students()
+                all_users[db_id]['lang'] = lang
+                db.save_all_students(all_users)
+            elif role == 'teacher':
+                all_teachers = db.get_all_teachers()
+                all_teachers[db_id]['lang'] = lang
+                db.save_all_teachers(all_teachers)
+            elif role == 'admin':
+                all_admins = db.get_all_admins()
+                all_admins[db_id]['lang'] = lang
+                db.save_all_admins(all_admins)
+                
+            return user_data, db_id
+            
     return None, None
 
 async def handle_login_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
@@ -263,24 +316,10 @@ async def route_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE,
     else:
         return await start(update, context)
 
-async def placeholder_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    lang = context.user_data.get('lang', 'ru')
-    await update.message.reply_text(f"Вы нажали: {update.message.text}\n"
-                                    f"Этот раздел в разработке.",
-                                    reply_markup=update.message.reply_markup)
-    role = context.user_data.get('role')
-    if role == 'student': 
-        return STUDENT_MAIN
-    if role == 'teacher': 
-        return TEACHER_MAIN
-    if role == 'admin': 
-        return ADMIN_MAIN
-    return ConversationHandler.END
-
 def main() -> None:
     db.init_database()
     
-    TOKEN = "8412482120:AAEiZLLHmTLMf7-2NxPKm0tgq-P1vH55_nA"
+    TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     application = ApplicationBuilder().token(TOKEN).build()
 
     student_schedule_filter = filters.Text([
