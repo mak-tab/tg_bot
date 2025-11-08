@@ -19,7 +19,6 @@ from bot import (
     TEACHER_MAIN, 
     ADMIN_MAIN, 
     STUDENT_SCHEDULE, 
-    STUDENT_GRADES, 
     STUDENT_SETTINGS, 
     STUDENT_SETTINGS_CHANGE_LOGIN, 
     STUDENT_SETTINGS_CHANGE_PASS
@@ -28,13 +27,8 @@ from bot import (
 MESSAGES = {
     'ru': {
         'schedule_menu': "Выберите, какое расписание вы хотите посмотреть:",
-        'grades_menu': "Выберите предмет, чтобы посмотреть оценки:",
         'settings_menu': "Ваши настройки.\nНажимайте на кнопки, чтобы изменить их.",
-        'no_grades': "У вас пока нет оценок.",
-        'no_subjects': "Не удалось найти предметы. Обратитесь к администратору.",
         'schedule_not_found': "Не удалось найти расписание для вашего класса ({class_letter}).",
-        'grades_title': "Оценки по предмету <b>{subject}</b>:",
-        'grades_line': "• {date}: <b>{grade}</b>",
         'settings_prompt_login': "Введите ваш новый <b>логин</b>.\n\n(Чтобы отменить, напишите /cancel)",
         'settings_prompt_pass': "Отлично, логин <code>{login}</code>.\nТеперь введите ваш новый <b>пароль</b>.\n\n(Чтобы отменить, напишите /cancel)",
         'settings_changed_success': "✅ Ваш логин и пароль успешно изменены.",
@@ -53,13 +47,8 @@ MESSAGES = {
     },
     'en': {
         'schedule_menu': "Select which schedule you want to view:",
-        'grades_menu': "Select a subject to view grades:",
         'settings_menu': "Your settings.\nPress the buttons to change them.",
-        'no_grades': "You have no grades yet.",
-        'no_subjects': "Could not find subjects. Contact the administrator.",
         'schedule_not_found': "Could not find schedule for your class ({class_letter}).",
-        'grades_title': "Grades for <b>{subject}</b>:",
-        'grades_line': "• {date}: <b>{grade}</b>",
         'settings_prompt_login': "Enter your new <b>username</b>.\n\n(To cancel, type /cancel)",
         'settings_prompt_pass': "Great, username is <code>{login}</code>.\nNow enter your new <b>password</b>.\n\n(To cancel, type /cancel)",
         'settings_changed_success': "✅ Your username and password have been successfully changed.",
@@ -78,13 +67,8 @@ MESSAGES = {
     },
     'uz': {
         'schedule_menu': "Qaysi dars jadvalini ko'rmoqchisiz:",
-        'grades_menu': "Baholarni ko'rish uchun fanni tanlang:",
         'settings_menu': "Sizning sozlamalaringiz.\nO'zgartirish uchun tugmalarni bosing.",
-        'no_grades': "Sizda hozircha baholar yo'q.",
-        'no_subjects': "Fanlar topilmadi. Ma'muriyatga murojaat qiling.",
         'schedule_not_found': "Sinfingiz ({class_letter}) uchun dars jadvali topilmadi.",
-        'grades_title': "<b>{subject}</b> fani bo'yicha baholar:",
-        'grades_line': "• {date}: <b>{grade}</b>",
         'settings_prompt_login': "Yangi <b>login</b> kiriting.\n\n(Bekor qilish uchun /cancel yozing)",
         'settings_prompt_pass': "Ajoyib, login <code>{login}</code>.\nEndi yangi <b>parolni</b> kiriting.\n\n(Bekor qilish uchun /cancel yozing)",
         'settings_changed_success': "✅ Login va parolingiz muvaffaqiyatli o'zgartirildi.",
@@ -140,24 +124,6 @@ async def handle_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
     return STUDENT_SCHEDULE
 
-async def handle_grades(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    lang, user_info, db_id = get_user_data(context)
-    
-    all_data = db.get_app_data()
-    user_grades = all_data.get('grades', {}).get(db_id, {})
-    
-    subjects_list = list(user_grades.keys())
-    
-    if not subjects_list:
-        await update.message.reply_text(get_std_msg('no_grades', lang))
-        return STUDENT_MAIN
-        
-    await update.message.reply_text(
-        get_std_msg('grades_menu', lang),
-        reply_markup=kb.generate_subjects_keyboard(subjects_list, lang)
-    )
-    return STUDENT_GRADES
-
 async def handle_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
     lang, user_info, _ = get_user_data(context)
     await update.message.reply_text(
@@ -173,8 +139,19 @@ def _format_schedule_for_day(schedule_data, day_name_key, lang):
     day_name = get_std_msg(day_name_key, lang)
     lines = [f"<b>{day_name}</b>:"]
     for lesson_num in sorted(schedule_data.keys(), key=lambda x: int(x)):
-        lesson_name = schedule_data[lesson_num]
-        lines.append(f"  {lesson_num}. {lesson_name}")
+        lesson_data = schedule_data[lesson_num]
+        
+        if not isinstance(lesson_data, dict):
+            continue
+            
+        subject = lesson_data.get('subject', 'N/A')
+        cabinet = lesson_data.get('cabinet', '???')
+        
+        line_text = f"  {lesson_num}. {subject}"
+        if cabinet and cabinet != "???":
+            line_text += f"  (Каб: {cabinet})"
+            
+        lines.append(line_text)
     return "\n".join(lines)
 
 
@@ -248,45 +225,6 @@ async def show_schedule_full(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
     await update.message.reply_text("\n\n".join(full_schedule_lines), parse_mode='HTML')
     return STUDENT_SCHEDULE
-
-async def show_grades_for_subject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    query = update.callback_query
-    await query.answer()
-    
-    lang, _, db_id = get_user_data(context)
-    
-    try:
-        subject = query.data.split('grade_subj_')[-1]
-    except Exception:
-        await query.edit_message_text("Ошибка: не удалось распознать предмет.")
-        return STUDENT_GRADES
-        
-    all_data = db.get_app_data()
-    user_grades = all_data.get('grades', {}).get(db_id, {})
-    subject_grades = user_grades.get(subject, {})
-    
-    if not subject_grades:
-        await query.edit_message_text(get_std_msg('no_grades', lang))
-        return STUDENT_GRADES
-        
-    lines = [get_std_msg('grades_title', lang).format(subject=subject)]
-    try:
-        sorted_dates = sorted(subject_grades.keys())
-    except Exception:
-        sorted_dates = subject_grades.keys()
-
-    for date in sorted_dates:
-        grade = subject_grades[date]
-        lines.append(get_std_msg('grades_line', lang).format(date=date, grade=grade))
-    
-    subjects_list = list(user_grades.keys())
-    await query.edit_message_text(
-        "\n".join(lines),
-        reply_markup=kb.generate_subjects_keyboard(subjects_list, lang),
-        parse_mode='HTML'
-    )
-    
-    return STUDENT_GRADES
 
 async def _toggle_setting(update: Update, context: ContextTypes.DEFAULT_TYPE, setting_key: str) -> str:
     query = update.callback_query

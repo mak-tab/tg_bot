@@ -1,3 +1,7 @@
+import datetime
+import pytz
+import asyncio 
+from telegram.error import Forbidden
 import logging
 import os
 from telegram import Update, ReplyKeyboardRemove
@@ -27,7 +31,6 @@ TEACHER_MAIN,
 ADMIN_MAIN,
 
 STUDENT_SCHEDULE, 
-STUDENT_GRADES, 
 STUDENT_SETTINGS, 
 STUDENT_SETTINGS_CHANGE_LOGIN, 
 STUDENT_SETTINGS_CHANGE_PASS,
@@ -47,8 +50,14 @@ ADMIN_REGISTER_STEP_3_CLASS,
 ADMIN_REGISTER_STEP_4_LETTER, 
 ADMIN_REGISTER_STEP_5_LOGIN, 
 ADMIN_REGISTER_STEP_6_PASS,
-ADMIN_EDIT_SCHEDULE
-) = map(str, range(27))
+ADMIN_EDIT_SCHEDULE,
+
+ADMIN_REGISTER_TEACHER_STEP_1_NAME,
+ADMIN_REGISTER_TEACHER_STEP_2_LASTNAME,
+ADMIN_REGISTER_TEACHER_STEP_3_SUBJECT,
+ADMIN_REGISTER_TEACHER_STEP_4_LOGIN,
+ADMIN_REGISTER_TEACHER_STEP_5_PASS,
+) = map(str, range(31))
 
 import student
 import teacher
@@ -115,7 +124,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
         context.user_data['user_info'] = user_data
         context.user_data['role'] = role
         context.user_data['lang'] = lang
-        context.user_data['db_id'] = telegram_id
+        # context.user_data['db_id'] = telegram_id
         
         await update.message.reply_text(
             get_msg('hello_user', lang).format(first_name=user_data.get('first_name', '')),
@@ -189,7 +198,8 @@ async def try_login(username, password, role, telegram_id, lang):
     if user_data and user_data.get('password') == password:
         user_data['lang'] = lang
         
-        if db_id.startswith("new_"):
+        # if db_id.startswith("new_"):
+        if False:
             logger.info(f"Первый вход для {username}. Привязка telegram_id {telegram_id}...")
             if role == 'student':
                 all_users = db.get_all_students()
@@ -312,6 +322,82 @@ async def route_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE,
     else:
         return await start(update, context)
 
+async def check_lesson_warnings(context: ContextTypes.DEFAULT_TYPE):
+    try:
+        tz = pytz.timezone("Asia/Tashkent")
+        now = datetime.datetime.now(tz)
+
+        minutes_before = 5
+        target_time_dt = now + datetime.timedelta(minutes=minutes_before)
+        target_time_str = target_time_dt.strftime("%H:%M")
+
+        timetable = db.get_timetable()
+
+        target_lesson_num = None
+        for lesson_num, lesson_time in timetable.items():
+            if lesson_time == target_time_str:
+                target_lesson_num = lesson_num
+                break
+
+        if not target_lesson_num:
+            return
+
+        day_db_keys = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+        today_key = day_db_keys[now.weekday()]
+
+        all_schedule = db.get_schedule()
+
+        all_students = db.get_all_students()
+
+        tasks = []
+
+        for student_id, student_data in all_students.items():
+            if not student_data.get('warning_about_next_lesson'):
+                continue
+
+            class_num = student_data.get('class')
+            letter = student_data.get('letter')
+            if not class_num or not letter:
+                continue
+
+            class_key = db.normalize_class_key(f"{class_num}{letter}")
+
+            try:
+                class_schedule = all_schedule.get(class_key, {})
+                day_schedule = class_schedule.get(today_key, {})
+                lesson_data = day_schedule.get(target_lesson_num)
+
+                if lesson_data and isinstance(lesson_data, dict):
+                    subject = lesson_data.get('subject', 'N/A')
+                    cabinet = lesson_data.get('cabinet', '???')
+                    lang = student_data.get('lang', 'ru')
+
+                    msg_texts = {
+                        'ru': f"🔔 Следующий урок ({subject}) начнется через {minutes_before} минут! (Кабинет: {cabinet})",
+                        'en': f"🔔 Next lesson ({subject}) starts in {minutes_before} minutes! (Room: {cabinet})",
+                        'uz': f"🔔 Keyingi dars ({subject}) {minutes_before} daqiqadan so'ng boshlanadi! (Xona: {cabinet})",
+                    }
+                    message = msg_texts.get(lang, msg_texts['ru'])
+
+                    tasks.append(
+                        context.bot.send_message(chat_id=student_id, text=message)
+                    )
+
+            except Exception as e:
+                logger.error(f"Ошибка при обработке уведомления для {student_id}: {e}")
+
+        if tasks:
+            logger.info(f"Отправка {len(tasks)} уведомлений о {target_lesson_num}-м уроке.")
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for i, result in enumerate(results):
+                if isinstance(result, Forbidden):
+                    logger.warning(f"Не удалось отправить уведомление: Бот заблокирован {list(all_students.keys())[i]}")
+                elif isinstance(result, Exception):
+                    logger.error(f"Ошибка отправки уведомления: {result}")
+
+    except Exception as e:
+        logger.error(f"Критическая ошибка в job 'check_lesson_warnings': {e}")
+
 def main() -> None:
     db.init_database()
     from dotenv import load_dotenv
@@ -387,6 +473,11 @@ def main() -> None:
         kb.get_text('admin_edit_schedule', 'en'),
         kb.get_text('admin_edit_schedule', 'uz')
     ])
+    admin_register_teacher_filter = filters.Text([
+        kb.get_text('admin_reg_teacher', 'ru'),
+        kb.get_text('admin_reg_teacher', 'en'),
+        kb.get_text('admin_reg_teacher', 'uz')
+    ])
     
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
@@ -403,7 +494,6 @@ def main() -> None:
 
             STUDENT_MAIN: [
                 MessageHandler(student_schedule_filter, student.handle_schedule),
-                MessageHandler(student_grades_filter, student.handle_grades),
                 MessageHandler(student_settings_filter, student.handle_settings),
                 CallbackQueryHandler(student.back_to_main_callback, pattern='^back_to_main_menu$'),
             ],
@@ -415,6 +505,7 @@ def main() -> None:
             ],
             ADMIN_MAIN: [
                 MessageHandler(admin_register_filter, admin.handle_register_student),
+                MessageHandler(admin_register_teacher_filter, admin.handle_register_teacher),
                 MessageHandler(admin_schedule_filter, admin.handle_edit_schedule),
             ],
 
@@ -422,10 +513,6 @@ def main() -> None:
                 MessageHandler(student_schedule_tomorrow_filter, student.show_schedule_tomorrow),
                 MessageHandler(student_schedule_full_filter, student.show_schedule_full),
                 MessageHandler(back_filter, student.back_to_main),
-            ],
-            STUDENT_GRADES: [
-                CallbackQueryHandler(student.show_grades_for_subject, pattern='^grade_subj_'),
-                CallbackQueryHandler(student.back_to_main_callback, pattern='^back_to_main_menu$'),
             ],
             STUDENT_SETTINGS: [
                 CallbackQueryHandler(student.toggle_next_lesson, pattern='^settings_toggle_next_lesson$'),
@@ -503,6 +590,26 @@ def main() -> None:
                 CommandHandler('cancel', admin.cancel_register),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, admin.register_step_6_pass)
             ],
+            ADMIN_REGISTER_TEACHER_STEP_1_NAME: [
+                CommandHandler('cancel', admin.cancel_register_teacher),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin.register_teacher_step_1_name)
+            ],
+            ADMIN_REGISTER_TEACHER_STEP_2_LASTNAME: [
+                CommandHandler('cancel', admin.cancel_register_teacher),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin.register_teacher_step_2_lastname)
+            ],
+            ADMIN_REGISTER_TEACHER_STEP_3_SUBJECT: [
+                CommandHandler('cancel', admin.cancel_register_teacher),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin.register_teacher_step_3_subject)
+            ],
+            ADMIN_REGISTER_TEACHER_STEP_4_LOGIN: [
+                CommandHandler('cancel', admin.cancel_register_teacher),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin.register_teacher_step_4_login)
+            ],
+            ADMIN_REGISTER_TEACHER_STEP_5_PASS: [
+                CommandHandler('cancel', admin.cancel_register_teacher),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin.register_teacher_step_5_pass)
+            ],
 
             ADMIN_EDIT_SCHEDULE: [
                 CommandHandler('cancel', admin.cancel_edit_schedule),
@@ -514,6 +621,8 @@ def main() -> None:
         ],
     )
     application.add_handler(conv_handler)
+    job_queue = application.job_queue
+    job_queue.run_repeating(check_lesson_warnings, interval=60, first=10)
     application.run_polling()
 
 if __name__ == "__main__":

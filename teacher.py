@@ -20,10 +20,6 @@ from bot import (
     TEACHER_ATTENDANCE_SELECT_LETTER, 
     TEACHER_ATTENDANCE_SELECT_STUDENT, 
     TEACHER_ATTENDANCE_MARK_STUDENT,
-    TEACHER_GRADES_SELECT_CLASS, 
-    TEACHER_GRADES_SELECT_LETTER,
-    TEACHER_GRADES_SELECT_STUDENT, 
-    TEACHER_GRADES_MARK_STUDENT,
     TEACHER_SETTINGS, 
     TEACHER_SETTINGS_CHANGE_LOGIN,
     TEACHER_SETTINGS_CHANGE_PASS
@@ -229,23 +225,7 @@ async def handle_attendance(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     )
     return TEACHER_ATTENDANCE_SELECT_CLASS
 
-async def handle_grades(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    lang, _, _ = get_user_data(context)
-    classes_dict = _get_all_classes_and_letters()
-    
-    if not classes_dict:
-        await update.message.reply_text(get_tchr_msg('error_generic', lang))
-        return TEACHER_MAIN
-        
-    await update.message.reply_text(
-        get_tchr_msg('grades_select_class', lang),
-        reply_markup=kb.generate_class_list_keyboard(
-            classes_list=classes_dict.keys(),
-            callback_prefix='grade_class_',
-            lang=lang
-        )
-    )
-    return TEACHER_GRADES_SELECT_CLASS
+
 
 def _get_teacher_schedule(teacher_subject: str) -> dict:
     all_schedule = db.get_schedule()
@@ -262,11 +242,21 @@ def _get_teacher_schedule(teacher_subject: str) -> dict:
             if day_key not in teacher_schedule: 
                 continue
             
-            for lesson_num, subject_name in day_schedule.items():
+            for lesson_num, lesson_data in day_schedule.items():
+                
+                # Пропускаем, если данные в старом формате
+                if not isinstance(lesson_data, dict):
+                    continue
+                
+                subject_name = lesson_data.get('subject')
+                
                 if subject_name == teacher_subject:
                     try:
                         num = int(lesson_num)
-                        info_str = f"{class_key} (Урок {lesson_num})"
+                        cabinet = lesson_data.get('cabinet', '???')
+                        
+                        info_str = f"{class_key} (Урок {lesson_num}, Каб: {cabinet})"
+                        
                         teacher_schedule[day_key].append((num, info_str))
                     except ValueError:
                         continue
@@ -473,137 +463,6 @@ async def mark_attendance(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     
     await query.edit_message_text(
         get_tchr_msg('attendance_marked', lang).format(name=student_name, status_icon=status_icon),
-        parse_mode='HTML'
-    )
-    
-    return await back_to_main_callback(update, context)
-
-
-async def select_grades_class(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    query = update.callback_query
-    await query.answer()
-    lang, _, _ = get_user_data(context)
-    
-    class_num = ""
-    if query.data.startswith('grade_class_'):
-        class_num = query.data.split('grade_class_')[-1]
-    elif query.data.startswith('grade_student_back_to_letter_'):
-        class_num = query.data.split('_')[-1]
-
-    if not class_num:
-        await query.edit_message_text(get_tchr_msg('error_generic', lang))
-        return TEACHER_MAIN
-
-    classes_dict = _get_all_classes_and_letters()
-    letters_list = classes_dict.get(class_num, [])
-    
-    await query.edit_message_text(
-        get_tchr_msg('grades_select_letter', lang),
-        reply_markup=kb.generate_letter_list_keyboard(
-            letters_list=letters_list,
-            class_num=class_num,
-            callback_prefix='grade_letter_',
-            lang=lang
-        )
-    )
-    return TEACHER_GRADES_SELECT_LETTER
-
-async def select_grades_letter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    query = update.callback_query
-    await query.answer()
-    lang, _, _ = get_user_data(context)
-    
-    class_num, letter = "", ""
-    try:
-        if query.data.startswith('grade_letter_'):
-            class_num, letter = query.data.split('grade_letter_')[-1].split('_')
-        elif query.data.startswith('grade_back_to_student_list_'):
-            class_num, letter = query.data.split('grade_back_to_student_list_')[-1].split('_')
-        else:
-            raise ValueError("Invalid callback data")
-            
-    except Exception:
-        await query.edit_message_text(get_tchr_msg('error_generic', lang))
-        return TEACHER_MAIN
-    
-    students_list = _get_students_by_class(class_num, letter)
-    
-    await query.edit_message_text(
-        get_tchr_msg('grades_select_student', lang).format(class_letter=f"{class_num}{letter}"),
-        reply_markup=kb.generate_students_list_keyboard(
-            students_data=students_list,
-            class_num=class_num,
-            letter=letter,
-            callback_prefix='grade_student_',
-            lang=lang
-        )
-    )
-    return TEACHER_GRADES_SELECT_STUDENT
-
-async def select_grades_student(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    query = update.callback_query
-    await query.answer()
-    lang, user_info, _ = get_user_data(context)
-    
-    student_id = query.data.split('grade_student_')[-1]
-    
-    all_students = db.get_all_students()
-    student_data = all_students.get(student_id)
-    if not student_data:
-        await query.edit_message_text(get_tchr_msg('error_student_not_found', lang)) 
-        return TEACHER_MAIN
-        
-    name = f"{student_data.get('first_name', '')} {student_data.get('last_name', '')}"
-    teacher_subject = user_info.get('subject', 'N/A')
-    
-    class_num = student_data.get('class')
-    letter = student_data.get('letter')
-    
-    context.user_data['selected_student_id'] = student_id
-    context.user_data['selected_student_name'] = name
-    
-    await query.edit_message_text(
-        get_tchr_msg('grades_marking', lang).format(name=name, subject=teacher_subject),
-        reply_markup=kb.get_grades_markup(lang, class_num, letter),
-        parse_mode='HTML'
-    )
-    return TEACHER_GRADES_MARK_STUDENT
-
-async def set_grade(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Сохраняет оценку."""
-    query = update.callback_query
-    await query.answer()
-    lang, user_info, _ = get_user_data(context)
-    
-    grade = query.data.split('grade_')[-1]
-    student_id = context.user_data.pop('selected_student_id', None)
-    student_name = context.user_data.pop('selected_student_name', 'N/A')
-    teacher_subject = user_info.get('subject')
-    
-    if not student_id or not teacher_subject:
-        await query.edit_message_text(get_tchr_msg('error_teacher_subject_not_found', lang))
-        return TEACHER_MAIN
-        
-    today_str = datetime.datetime.now(pytz.timezone("Asia/Tashkent")).date().isoformat()
-    
-    app_data = db.get_app_data()
-    if 'grades' not in app_data:
-        app_data['grades'] = {}
-    if student_id not in app_data['grades']:
-        app_data['grades'][student_id] = {}
-    if teacher_subject not in app_data['grades'][student_id]:
-        app_data['grades'][student_id][teacher_subject] = {}
-        
-    app_data['grades'][student_id][teacher_subject][today_str] = grade
-    db.save_app_data(app_data)
-    
-    await query.edit_message_text(
-        get_tchr_msg('grades_marked_success', lang).format(
-            grade=grade, 
-            name=student_name, 
-            subject=teacher_subject, 
-            date=today_str
-        ),
         parse_mode='HTML'
     )
     

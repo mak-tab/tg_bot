@@ -10,7 +10,6 @@ translations = {
         'role_teacher': "Учитель 🧑‍🏫",
         'role_admin': "Администрация 💼",
         'main_schedule': "Расписание 🗓️",
-        'main_grades': "Оценки 📊",
         'main_settings': "Настройки ⚙️",
         'main_attendance': "Присутствие ✅",
         'schedule_today': "На сегодня",
@@ -22,6 +21,7 @@ translations = {
         'settings_daily_schedule_off': "🔕 Расписание утром (ВЫКЛ)",
         'settings_change_login': "Сменить логин/пароль 🔑",
         'admin_reg_student': "Регистрация ученика ➕",
+        'admin_reg_teacher': "Регистрация учителя 🧑‍🏫",
         'admin_edit_schedule': "Изменить расписание ✏️",
         'attendance_present': "✅ Присутствует",
         'attendance_absent': "❌ Отсутствует",
@@ -32,7 +32,6 @@ translations = {
         'role_teacher': "Teacher 🧑‍🏫",
         'role_admin': "Administration 💼",
         'main_schedule': "Schedule 🗓️",
-        'main_grades': "Grades 📊",
         'main_settings': "Settings ⚙️",
         'main_attendance': "Attendance ✅",
         'schedule_today': "For today",
@@ -44,6 +43,7 @@ translations = {
         'settings_daily_schedule_off': "🔕 Daily schedule (OFF)",
         'settings_change_login': "Change login/password 🔑",
         'admin_reg_student': "Register student ➕",
+        'admin_reg_teacher': "Register teacher 🧑‍🏫",
         'admin_edit_schedule': "Edit schedule ✏️",
         'attendance_present': "✅ Present",
         'attendance_absent': "❌ Absent",
@@ -54,7 +54,6 @@ translations = {
         'role_teacher': "O'qituvchi 🧑‍🏫",
         'role_admin': "Ma'muriyat 💼",
         'main_schedule': "Dars jadvali 🗓️",
-        'main_grades': "Baholar 📊",
         'main_settings': "Sozlamalar ⚙️",
         'main_attendance': "Davomat ✅",
         'schedule_today': "Bugungi",
@@ -66,6 +65,7 @@ translations = {
         'settings_daily_schedule_off': "🔕 Ertalabki jadval (O'CHIQ)",
         'settings_change_login': "Login/parolni o'zgartirish 🔑",
         'admin_reg_student': "O'quvchini ro'yxatga olish ➕",
+        'admin_reg_teacher': "O'qituvchini ro'yxatga olish 🧑‍🏫",
         'admin_edit_schedule': "Jadvalni tahrirlash ✏️",
         'attendance_present': "✅ Qatnashdi",
         'attendance_absent': "❌ Qatnashmadi",
@@ -95,7 +95,6 @@ def get_role_keyboard(lang='ru'):
 def get_student_main_keyboard(lang='ru'):
     keyboard = [
         [KeyboardButton(get_text('main_schedule', lang))],
-        [KeyboardButton(get_text('main_grades', lang))],
         [KeyboardButton(get_text('main_settings', lang))],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -136,22 +135,10 @@ def get_attendance_markup(lang='ru', class_num=None, letter=None):
     ]
     return InlineKeyboardMarkup(keyboard)
 
-def get_grades_markup(lang='ru', class_num=None, letter=None):
-    back_callback = f'grade_back_to_student_list_{class_num}_{letter}'
-    keyboard = [
-        [
-            InlineKeyboardButton("2", callback_data='grade_2'),
-            InlineKeyboardButton("3", callback_data='grade_3'),
-            InlineKeyboardButton("4", callback_data='grade_4'),
-            InlineKeyboardButton("5", callback_data='grade_5'),
-        ],
-        [InlineKeyboardButton(get_text('back', lang), callback_data=back_callback)]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
 def get_admin_main_keyboard(lang='ru'):
     keyboard = [
         [KeyboardButton(get_text('admin_reg_student', lang))],
+        [KeyboardButton(get_text('admin_reg_teacher', lang))],
         [KeyboardButton(get_text('admin_edit_schedule', lang))],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)

@@ -25,12 +25,19 @@ from bot import (
     ADMIN_REGISTER_STEP_4_LETTER,
     ADMIN_REGISTER_STEP_5_LOGIN, 
     ADMIN_REGISTER_STEP_6_PASS,
+    ADMIN_REGISTER_TEACHER_STEP_1_NAME,
+    ADMIN_REGISTER_TEACHER_STEP_2_LASTNAME,
+    ADMIN_REGISTER_TEACHER_STEP_3_SUBJECT,
+    ADMIN_REGISTER_TEACHER_STEP_4_LOGIN,
+    ADMIN_REGISTER_TEACHER_STEP_5_PASS,
     ADMIN_EDIT_SCHEDULE 
 )
 
 logger = logging.getLogger(__name__)
 
 import os
+from dotenv import load_dotenv
+load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 genai.configure(api_key=GEMINI_API_KEY)
 
@@ -66,7 +73,21 @@ MESSAGES = {
         'schedule_edit_error_api': "❌ Ошибка API Gemini. Попробуйте позже.",
         'schedule_edit_error_json': "❌ AI вернул некорректные данные. Не удалось обновить расписание.",
         'schedule_edit_error_missing_info': "❓ Недостаточно информации. {ai_question}\n\nПожалуйста, уточните ваш запрос.",
-        'schedule_edit_cancel': "Редактирование расписания отменено."
+        'schedule_edit_cancel': "Редактирование расписания отменено.",
+        'cancel_register_teacher': "❌ Регистрация учителя отменена.",
+        'register_teacher_start': "<b>Регистрация нового учителя</b>\n\n(Чтобы отменить, введите /cancel в любой момент)\n\n<b>Шаг 1/5:</b> Введите <b>Имя</b> учителя:",
+        'register_teacher_step_2': "Отлично, Имя: <b>{first_name}</b>\n\n<b>Шаг 2/5:</b> Введите <b>Фамилию</b> учителя:",
+        'register_teacher_step_3': "Фамилия: <b>{last_name}</b>\n\n<b>Шаг 3/5:</b> Введите <b>Предмет</b>, который ведет учитель (например, <code>Математика</code>):",
+        'register_teacher_step_4': "Предмет: <b>{subject}</b>\n\n<b>Шаг 4/5:</b> Введите <b>Логин</b> для учителя (username):",
+        'register_teacher_step_5': "Логин: <code>{username}</code>\n\n<b>Шаг 5/5:</b> Введите <b>Пароль</b> для учителя:",
+        'register_teacher_success': "✅ <b>Учитель успешно зарегистрирован!</b>\n\n"
+                                  "<b>Имя:</b> {first_name}\n"
+                                  "<b>Фамилия:</b> {last_name}\n"
+                                  "<b>Предмет:</b> {subject}\n"
+                                  "<b>Логин:</b> <code>{username}</code>\n"
+                                  "<b>Пароль:</b> <code>{password}</code>\n"
+                                  "<b>ID в базе:</b> <code>{db_id}</code>",
+        'register_teacher_username_exists': "❌ Этот логин (<code>{username}</code>) уже занят. Попробуйте другой.\n\n<b>Шаг 4/5:</b> Введите <b>Логин</b>:",
     },
     'en': {
         'back_to_main': "Main Menu",
@@ -100,8 +121,22 @@ MESSAGES = {
         'schedule_edit_error_api': "❌ Gemini API error. Please try again later.",
         'schedule_edit_error_json': "❌ AI returned invalid data. Could not update the schedule.",
         'schedule_edit_error_missing_info': "❓ Not enough information. {ai_question}\n\nPlease clarify your request.",
-        'schedule_edit_cancel': "Schedule editing cancelled."
-    },
+        'schedule_edit_cancel': "Schedule editing cancelled.",
+        'cancel_register_teacher': "❌ Teacher registration has been cancelled.",
+        'register_teacher_start': "<b>New Teacher Registration</b>\n\n(To cancel, type /cancel at any time)\n\n<b>Step 1/5:</b> Enter the teacher’s <b>First Name</b>:",
+        'register_teacher_step_2': "Great, First Name: <b>{first_name}</b>\n\n<b>Step 2/5:</b> Enter the teacher’s <b>Last Name</b>:",
+        'register_teacher_step_3': "Last Name: <b>{last_name}</b>\n\n<b>Step 3/5:</b> Enter the <b>Subject</b> the teacher teaches (e.g. <code>Mathematics</code>):",
+        'register_teacher_step_4': "Subject: <b>{subject}</b>\n\n<b>Step 4/5:</b> Enter a <b>Username</b> for the teacher:",
+        'register_teacher_step_5': "Username: <code>{username}</code>\n\n<b>Step 5/5:</b> Enter a <b>Password</b> for the teacher:",
+        'register_teacher_success': "✅ <b>Teacher successfully registered!</b>\n\n"
+                                    "<b>First Name:</b> {first_name}\n"
+                                    "<b>Last Name:</b> {last_name}\n"
+                                    "<b>Subject:</b> {subject}\n"
+                                    "<b>Username:</b> <code>{username}</code>\n"
+                                    "<b>Password:</b> <code>{password}</code>\n"
+                                    "<b>Database ID:</b> <code>{db_id}</code>",
+        'register_teacher_username_exists': "❌ This username (<code>{username}</code>) is already taken. Please try another one.\n\n<b>Step 4/5:</b> Enter a <b>Username</b>:",
+},
     'uz': {
         'back_to_main': "Asosiy menyu",
         'cancel_register': "❌ O‘quvchi ro‘yxatdan o‘tishi bekor qilindi.",
@@ -133,7 +168,21 @@ MESSAGES = {
         'schedule_edit_error_api': "❌ Gemini API xatosi. Keyinroq urinib ko‘ring.",
         'schedule_edit_error_json': "❌ AI noto‘g‘ri ma’lumot qaytardi. Jadval yangilanmadi.",
         'schedule_edit_error_missing_info': "❓ Yetarli ma’lumot yo‘q. {ai_question}\n\nIltimos, so‘rovingizni aniqlashtiring.",
-        'schedule_edit_cancel': "Jadvalni tahrirlash bekor qilindi."
+        'schedule_edit_cancel': "Jadvalni tahrirlash bekor qilindi.",
+        'cancel_register_teacher': "❌ O‘qituvchi ro‘yxatdan o‘tkazish bekor qilindi.",
+        'register_teacher_start': "<b>Yangi o‘qituvchini ro‘yxatdan o‘tkazish</b>\n\n(Istalgan vaqtda /cancel deb yozib, bekor qilishingiz mumkin)\n\n<b>1/5-qadam:</b> O‘qituvchining <b>Ismini</b> kiriting:",
+        'register_teacher_step_2': "Ajoyib, Ism: <b>{first_name}</b>\n\n<b>2/5-qadam:</b> O‘qituvchining <b>Familiyasini</b> kiriting:",
+        'register_teacher_step_3': "Familiya: <b>{last_name}</b>\n\n<b>3/5-qadam:</b> O‘qituvchi o‘tadigan <b>Fan</b> nomini kiriting (masalan, <code>Matematika</code>):",
+        'register_teacher_step_4': "Fan: <b>{subject}</b>\n\n<b>4/5-qadam:</b> O‘qituvchi uchun <b>Foydalanuvchi nomini (username)</b> kiriting:",
+        'register_teacher_step_5': "Foydalanuvchi nomi: <code>{username}</code>\n\n<b>5/5-qadam:</b> O‘qituvchi uchun <b>Parolni</b> kiriting:",
+        'register_teacher_success': "✅ <b>O‘qituvchi muvaffaqiyatli ro‘yxatdan o‘tkazildi!</b>\n\n"
+                                    "<b>Ism:</b> {first_name}\n"
+                                    "<b>Familiya:</b> {last_name}\n"
+                                    "<b>Fan:</b> {subject}\n"
+                                    "<b>Foydalanuvchi nomi:</b> <code>{username}</code>\n"
+                                    "<b>Parol:</b> <code>{password}</code>\n"
+                                    "<b>Bazadagi ID:</b> <code>{db_id}</code>",
+        'register_teacher_username_exists': "❌ Bu foydalanuvchi nomi (<code>{username}</code>) allaqachon band. Iltimos, boshqasini kiriting.\n\n<b>4/5-qadam:</b> <b>Foydalanuvchi nomini</b> kiriting:",
     }
 }
 
@@ -272,6 +321,109 @@ async def register_step_6_pass(update: Update, context: ContextTypes.DEFAULT_TYP
             class_letter=f"{student_data['class']}{student_data['letter']}",
             username=student_data['username'],
             password=student_data['password'],
+            db_id=new_db_id
+        ),
+        parse_mode='HTML',
+        reply_markup=kb.get_admin_main_keyboard(lang)
+    )
+    return ADMIN_MAIN
+
+async def handle_register_teacher(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    lang, _, _ = get_user_data(context)
+    context.user_data['new_teacher_data'] = {}
+    await update.message.reply_text(
+        get_adm_msg('register_teacher_start', lang),
+        reply_markup=ReplyKeyboardRemove(),
+        parse_mode='HTML'
+    )
+    return ADMIN_REGISTER_TEACHER_STEP_1_NAME
+
+async def cancel_register_teacher(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    lang, _, _ = get_user_data(context)
+    context.user_data.pop('new_teacher_data', None)
+    await update.message.reply_text(
+        get_adm_msg('cancel_register_teacher', lang),
+        reply_markup=kb.get_admin_main_keyboard(lang)
+    )
+    return ADMIN_MAIN
+
+async def register_teacher_step_1_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    lang, _, _ = get_user_data(context)
+    first_name = update.message.text
+    context.user_data['new_teacher_data'] = {'first_name': first_name}
+    await update.message.reply_text(
+        get_adm_msg('register_teacher_step_2', lang).format(first_name=first_name),
+        parse_mode='HTML'
+    )
+    return ADMIN_REGISTER_TEACHER_STEP_2_LASTNAME
+
+async def register_teacher_step_2_lastname(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    lang, _, _ = get_user_data(context)
+    last_name = update.message.text
+    context.user_data['new_teacher_data']['last_name'] = last_name
+    await update.message.reply_text(
+        get_adm_msg('register_teacher_step_3', lang).format(last_name=last_name),
+        parse_mode='HTML'
+    )
+    return ADMIN_REGISTER_TEACHER_STEP_3_SUBJECT
+
+async def register_teacher_step_3_subject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    lang, _, _ = get_user_data(context)
+    subject = update.message.text
+    context.user_data['new_teacher_data']['subject'] = subject
+    await update.message.reply_text(
+        get_adm_msg('register_teacher_step_4', lang).format(subject=subject),
+        parse_mode='HTML'
+    )
+    return ADMIN_REGISTER_TEACHER_STEP_4_LOGIN
+
+async def register_teacher_step_4_login(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    lang, _, _ = get_user_data(context)
+    username = update.message.text.lower()
+    
+    if len(username.split()) > 1:
+        await update.message.reply_text(get_adm_msg('register_error_login_spaces', lang))
+        return ADMIN_REGISTER_TEACHER_STEP_4_LOGIN
+        
+    # ВАЖНО: Ищем пользователя в 'teacher'
+    db_id, user = db.find_user_by_username(username, 'teacher')
+    if user:
+        await update.message.reply_text(
+            get_adm_msg('register_teacher_username_exists', lang).format(username=username),
+            parse_mode='HTML'
+        )
+        return ADMIN_REGISTER_TEACHER_STEP_4_LOGIN
+        
+    context.user_data['new_teacher_data']['username'] = username
+    await update.message.reply_text(
+        get_adm_msg('register_teacher_step_5', lang).format(username=username),
+        parse_mode='HTML'
+    )
+    return ADMIN_REGISTER_TEACHER_STEP_5_PASS
+
+async def register_teacher_step_5_pass(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    lang, _, _ = get_user_data(context)
+    password = update.message.text
+    teacher_data = context.user_data.pop('new_teacher_data', {})
+    
+    teacher_data['password'] = password
+    teacher_data['lang'] = 'ru'
+    teacher_data['warning_about_next_lesson'] = True
+    teacher_data['warning_everyday_about_lessons'] = False
+    
+    # ВАЖНО: Сохраняем в 'teachers.json'
+    new_db_id = f"new_teacher_{uuid.uuid4()}"
+    all_teachers = db.get_all_teachers()
+    all_teachers[new_db_id] = teacher_data
+    db.save_all_teachers(all_teachers)
+    
+    await update.message.reply_text(
+        get_adm_msg('register_teacher_success', lang).format(
+            first_name=teacher_data['first_name'],
+            last_name=teacher_data['last_name'],
+            subject=teacher_data['subject'],
+            username=teacher_data['username'],
+            password=teacher_data['password'],
             db_id=new_db_id
         ),
         parse_mode='HTML',
